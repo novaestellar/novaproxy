@@ -93,6 +93,10 @@ python -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements.txt
+# playwright 只在配置“注册换取”类源时才需要；不装也能跑采集与网关
+
+# 确认依赖齐全
+python -c "import fastapi, uvicorn, aiosqlite, aiohttp, aiohttp_socks; print('deps ok')"
 
 # 3. 构建前端（仓库里已带 dist，只有改动前端时才需要）
 cd web
@@ -122,8 +126,10 @@ docker run -d --name novaproxy \
 ### 方式三：只想立刻用一个入口
 
 ```bash
+# macOS / Linux：后台启动并等它就绪
 python run.py &
 sleep 8
+# Windows：另开一个终端执行 python run.py，然后在下个终端继续下面两条命令
 curl -s http://127.0.0.1:12000/api/collect \
   -H 'Content-Type: application/json' \
   -d '{"target":300,"protocols":["http","socks5"],"rounds":3}'
