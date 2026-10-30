@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, -apple-system, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+
+  --color-background: #07080a;
+  --color-surface: #0c0e12;
+  --color-panel: #11141a;
+  --color-elevated: #171b23;
+  --color-border: #1f242e;
+  --color-border-strong: #2c333f;
+  --color-fg: #e8eaf0;
+  --color-muted: #8b93a3;
+  --color-faint: #5d6575;
+
+  --color-accent: #7c6cff;
+  --color-accent-soft: #2a2450;
+  --color-success: #3ddc97;
+  --color-warning: #f5b759;
+  --color-danger: #ff6b6b;
+  --color-info: #5cc8ff;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--color-background);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--color-accent) 35%, transparent);
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #262c37;
+    border-radius: 999px;
+    border: 2px solid var(--color-background);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #343b48;
+  }
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+  }
+}
+
+@utility grid-noise {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
+
+@utility glass {
+  background: color-mix(in oklab, var(--color-panel) 82%, transparent);
+  backdrop-filter: blur(12px);
+}
+
+@utility text-balance {
+  text-wrap: balance;
+}
+
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--color-success) 45%, transparent);
+  }
+  70% {
+    box-shadow: 0 0 0 6px transparent;
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+}
+
+.live-dot {
+  animation: pulse-ring 2s infinite;
+}
