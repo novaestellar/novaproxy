@@ -275,6 +275,7 @@ pytest -q
 | `NP_LOG` | `info` | uvicorn 日志级别 |
 | `NP_AUTH` | `local` | `local` 本机免登录；`on` 强制登录 |
 | `NP_GATEWAY_HOST` | `127.0.0.1` | 网关监听地址；容器内需设为 `0.0.0.0` |
+| `NP_AUTOPOOL` | `1` | 自动补池开关；`0` 关闭，池子保持原样 |
 | `NP_ADMIN_USER` | `admin` | 首次启动创建的账号 |
 | `NP_ADMIN_PASS` | 随机生成 | 首次启动的管理员密码；不设则随机生成并只打印一次 |
 
@@ -282,7 +283,7 @@ pytest -q
 
 ### 网关参数（界面保存，落库）
 
-`strategy` · `quota_mb` · `timeout` · `max_fails` · `retries` · `hedge_delay` · `deadline` · `first_byte_timeout` · `idle_timeout` · `health_interval` · `health_batch` · `socks_port` · `http_port`
+`strategy` · `quota_mb` · `timeout` · `max_fails` · `retries` · `hedge_delay` · `deadline` · `first_byte_timeout` · `idle_timeout` · `health_interval` · `health_batch` · `socks_port` · `http_port` · `max_per_proxy` · `host_block_minutes` · `verified_window` · `enabled_protocols`
 
 端口改动需要 stop / start 一次，其余即时生效。
 
