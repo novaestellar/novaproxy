@@ -1,3 +1,5 @@
+import os
+
 """Record a product demo video of the NovaProxy console.
 
 Requires the server on http://127.0.0.1:12000, Playwright Chromium
@@ -40,7 +42,7 @@ async def main() -> None:
         await page.locator("#username").press_sequentially("admin", delay=90)
         await page.wait_for_timeout(250)
         await page.locator("#password").click()
-        await page.locator("#password").press_sequentially("admin123", delay=70)
+        await page.locator("#password").press_sequentially(os.environ.get("NP_ADMIN_PASS", ""), delay=70)
         await page.wait_for_timeout(400)
         await page.get_by_role("button", name="Continue").click()
         await page.wait_for_selector("text=Collection quota")

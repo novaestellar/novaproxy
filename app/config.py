@@ -1,10 +1,15 @@
 import os
+import secrets
 
 DB_PATH = os.getenv("NP_DB", "novaproxy.db")
 
-# Admin bootstrap (created on first run if no users exist) — CHANGE THESE
+# Admin bootstrap (created on first run, only while the users table is empty).
+# There is no baked-in default: without NP_ADMIN_PASS a random password is
+# generated and printed once. A fixed "admin123" in a public repo is a login
+# waiting to be found.
 ADMIN_USERNAME = os.getenv("NP_ADMIN_USER", "admin")
-ADMIN_PASSWORD = os.getenv("NP_ADMIN_PASS", "admin123")
+ADMIN_PASSWORD = os.getenv("NP_ADMIN_PASS") or secrets.token_urlsafe(12)
+ADMIN_PASSWORD_GENERATED = os.getenv("NP_ADMIN_PASS") is None
 
 SESSION_TTL = 7 * 24 * 3600          # 7 days
 

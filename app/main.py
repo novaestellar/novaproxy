@@ -10,7 +10,8 @@ from fastapi.responses import (JSONResponse, RedirectResponse, PlainTextResponse
                                HTMLResponse, FileResponse, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
-from app.config import (ADMIN_USERNAME, ADMIN_PASSWORD, SIGNUP_SOURCES,
+from app.config import (ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_PASSWORD_GENERATED,
+                        SIGNUP_SOURCES,
                         VALIDATE_TIMEOUT, VALIDATE_CONCURRENCY, MAX_FAILED_CHECKS,
                         MAX_CANDIDATES, AUTO_DEDUPE, GEO_ENRICH, GEO_MAX,
                         SITE_CHECK_TIMEOUT, SITE_CHECK_LIMIT, SITE_CHECK_CONCURRENCY,
@@ -37,7 +38,12 @@ async def lifespan(app: FastAPI):
     async with db().execute("SELECT COUNT(*) c FROM users") as cur:
         if (await cur.fetchone())["c"] == 0:
             await create_user(ADMIN_USERNAME, ADMIN_PASSWORD, is_admin=True)
-            print(f"!! bootstrapped admin '{ADMIN_USERNAME}' - change the default password")
+            if ADMIN_PASSWORD_GENERATED:
+                print(f"!! bootstrapped admin '{ADMIN_USERNAME}' with a generated "
+                      f"password: {ADMIN_PASSWORD}")
+                print("   save it now - only the hash is stored")
+            else:
+                print(f"!! bootstrapped admin '{ADMIN_USERNAME}' from NP_ADMIN_PASS")
     autopool_task = asyncio.create_task(_autopool_loop())
     yield
     autopool_task.cancel()
