@@ -93,7 +93,8 @@ python -m venv .venv
 source .venv/bin/activate
 
 pip install -r requirements.txt
-# playwright 只在配置“注册换取”类源时才需要；不装也能跑采集与网关
+# 无头浏览器不是核心依赖。只有“注册换取”类源需要，单独装：
+#   pip install -r requirements-browser.txt && playwright install chromium
 
 # 确认依赖齐全
 python -c "import fastapi, uvicorn, aiosqlite, aiohttp, aiohttp_socks; print('deps ok')"
@@ -113,7 +114,10 @@ python run.py
 ### 方式二：Docker
 
 ```bash
+# 默认镜像约 250 MB：控制台 + 网关，不含浏览器
 docker build -t novaproxy .
+# 需要“注册换取”类源时再加浏览器（镜像会涨到约 1.8 GB）
+# docker build --build-arg WITH_BROWSER=1 -t novaproxy:browser .
 docker run -d --name novaproxy \
   -p 12000:12000 -p 11500:11500 -p 12500:12500 \
   -e NP_AUTH=local \

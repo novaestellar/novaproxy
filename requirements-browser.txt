@@ -1,0 +1,9 @@
+# Optional: headless Chromium for the signup-gated sources.
+#
+#   pip install -r requirements-browser.txt
+#   playwright install chromium          # the browser binary itself
+#
+# Without this, harvest / validate / gateway / site-check all work; only
+# app/sources/custom.py (the account-for-proxy flows) is unavailable.
+-r requirements.txt
+playwright>=1.44
