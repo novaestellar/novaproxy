@@ -1,9 +1,11 @@
 import type {
   Analytics,
+  Autopool,
   GatewayStatus,
   Me,
   ProxyFilters,
   ProxyResponse,
+  ProxySource,
   Settings,
   SiteCheckResponse,
   Stats,
@@ -136,6 +138,22 @@ export const api = {
     request<GatewayStatus>("/api/gateway/settings", jsonBody(patch)),
 
   analytics: () => request<Analytics>("/api/analytics"),
+
+  sources: () => request<{ items: ProxySource[] }>("/api/sources"),
+
+  sourceAdd: (body: { url: string; protocol: string; note?: string }) =>
+    request<{ ok: boolean; rows: number; detail: string }>("/api/sources", jsonBody(body)),
+
+  sourceToggle: (body: { url: string; protocol: string; enabled: boolean }) =>
+    request<{ ok: boolean }>("/api/sources/toggle", jsonBody(body)),
+
+  sourceRemove: (body: { url: string; protocol: string }) =>
+    request<{ ok: boolean }>("/api/sources/remove", jsonBody(body)),
+
+  autopool: () => request<Autopool>("/api/autopool"),
+
+  autopoolSet: (body: Partial<Autopool>) =>
+    request<Autopool>("/api/autopool", jsonBody(body)),
 
   setQuota: (body: { mb: number; scope?: "all"; items?: { ip: string; port: number; protocol: string }[] }) =>
     request<{ ok: boolean; updated: number | string; quota_bytes: number }>(

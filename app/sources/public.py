@@ -86,12 +86,46 @@ async def _fetch_geonode(session, protocols: set[str]) -> list[tuple[str, str]]:
     return out
 
 
+async def enabled_sources(protocols: set[str]) -> list[tuple[str, str]]:
+    """(protocol, url) pairs the registry says are live.
+
+    The table is the source of truth once seeded, so an operator can add a new
+    gate from the UI without touching code. Falls back to the built-in list if
+    the table is empty or unreachable.
+    """
+    from app.database import db
+
+    marks = ",".join("?" * len(protocols))
+    try:
+        async with db().execute(
+            f"SELECT protocol, url FROM sources WHERE enabled=1 "
+            f"AND protocol IN ({marks})", tuple(protocols)
+        ) as cur:
+            rows = [(r["protocol"], r["url"]) for r in await cur.fetchall()]
+    except Exception:
+        rows = []
+    if not rows:
+        rows = [(p, u) for p in protocols for u in RAW.get(p, [])]
+    return rows
+
+
+async def probe(url: str, protocol: str) -> tuple[int, str]:
+    """Fetch one feed and report how many addresses it yields."""
+    connector = aiohttp.TCPConnector(limit=4)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        try:
+            entries = await _fetch_text(session, url, protocol)
+        except Exception as exc:  # noqa: BLE001
+            return 0, f"{type(exc).__name__}: {exc}"
+    return len(entries), "ok"
+
+
 async def fetch_all(protocols: set[str]) -> list[tuple[str, str]]:
     """Returns [(protocol, 'ip:port')] deduplicated."""
-    connector = aiohttp.TCPConnector(limit=30)
+    sources = await enabled_sources(protocols)
+    connector = aiohttp.TCPConnector(limit=40)
     async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [_fetch_text(session, u, proto)
-                 for proto in protocols for u in RAW.get(proto, [])]
+        tasks = [_fetch_text(session, url, proto) for proto, url in sources]
         tasks.append(_fetch_geonode(session, protocols))
         results = await asyncio.gather(*tasks)
 

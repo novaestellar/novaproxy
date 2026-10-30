@@ -21,6 +21,8 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input, Label, NativeSelect } from "@/components/ui/input";
+import type { Autopool, ProxySource } from "@/lib/types";
 import { Skeleton } from "@/components/ui/progress";
 
 function Row({ label, value }: { label: string; value: ReactNode }) {
@@ -29,6 +31,229 @@ function Row({ label, value }: { label: string; value: ReactNode }) {
       <span className="text-[12px] text-muted">{label}</span>
       <span className="font-mono text-[12px] text-fg">{value}</span>
     </div>
+  );
+}
+
+function SourcesCard() {
+  const sources = useQuery({ queryKey: ["sources"], queryFn: api.sources });
+  const auto = useQuery({
+    queryKey: ["autopool"],
+    queryFn: api.autopool,
+    refetchInterval: 15_000,
+  });
+  const queryClient = useQueryClient();
+  const [url, setUrl] = useState("");
+  const [protocol, setProtocol] = useState("http");
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ["sources"] });
+    queryClient.invalidateQueries({ queryKey: ["autopool"] });
+  };
+
+  const add = useMutation({
+    mutationFn: () => api.sourceAdd({ url, protocol }),
+    onSuccess: (res) => {
+      toast.success(
+        res.rows
+          ? `${res.rows} addresses came back from the new gate`
+          : "Gate saved, but it returned nothing right now",
+      );
+      setUrl("");
+      refresh();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const toggle = useMutation({
+    mutationFn: (item: ProxySource) =>
+      api.sourceToggle({
+        url: item.url,
+        protocol: item.protocol,
+        enabled: !item.enabled,
+      }),
+    onSuccess: refresh,
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const remove = useMutation({
+    mutationFn: (item: ProxySource) =>
+      api.sourceRemove({ url: item.url, protocol: item.protocol }),
+    onSuccess: refresh,
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const saveAuto = useMutation({
+    mutationFn: (patch: Partial<Autopool>) => api.autopoolSet(patch),
+    onSuccess: () => {
+      toast.success("auto-pool saved");
+      refresh();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const items = sources.data?.items ?? [];
+  const cfg = auto.data;
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <div>
+          <CardTitle className="flex items-center gap-2">
+            <Globe2 className="size-4 text-accent" />
+            Sources &amp; auto-pool
+          </CardTitle>
+          <div className="mt-1 text-[12px] text-muted">
+            Gates the harvester reads. A new one joins the next round; auto-pool tops the pool
+            up on its own when it drains.
+          </div>
+        </div>
+        <Badge variant={cfg?.enabled ? "success" : "default"}>
+          {cfg?.enabled ? "auto on" : "auto off"}
+        </Badge>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="min-w-[260px] flex-1">
+            <Label>New gate URL</Label>
+            <Input
+              value={url}
+              onChange={(event) => setUrl(event.target.value)}
+              placeholder="https://example.com/proxies.txt"
+            />
+          </div>
+          <div className="w-32">
+            <Label>Protocol</Label>
+            <NativeSelect
+              value={protocol}
+              onChange={(event) => setProtocol(event.target.value)}
+            >
+              <option value="http">http</option>
+              <option value="socks4">socks4</option>
+              <option value="socks5">socks5</option>
+            </NativeSelect>
+          </div>
+          <Button
+            size="sm"
+            onClick={() => add.mutate()}
+            disabled={!url.trim() || add.isPending}
+          >
+            {add.isPending && <Loader2 className="size-3.5 animate-spin" />}
+            Add gate
+          </Button>
+        </div>
+
+        <div className="max-h-64 overflow-auto rounded-md border border-border">
+          <table className="w-full text-left text-[12px]">
+            <thead className="border-b border-border text-[10px] uppercase tracking-wide text-faint">
+              <tr>
+                <th className="px-3 py-2 font-medium">Gate</th>
+                <th className="px-3 py-2 font-medium">Proto</th>
+                <th className="px-3 py-2 font-medium">Rows</th>
+                <th className="px-3 py-2 font-medium text-right">State</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.length === 0 && (
+                <tr>
+                  <td className="px-3 py-3 text-[12px] text-muted" colSpan={4}>
+                    No gates yet. Add one above.
+                  </td>
+                </tr>
+              )}
+              {items.map((item) => (
+                <tr
+                  key={`${item.protocol}:${item.url}`}
+                  className="border-b border-border/60 last:border-0"
+                >
+                  <td
+                    className="max-w-[520px] truncate px-3 py-2 font-mono text-[11px] text-fg"
+                    title={item.url}
+                  >
+                    {item.url}
+                  </td>
+                  <td className="px-3 py-2 text-muted">{item.protocol}</td>
+                  <td className="px-3 py-2 font-mono text-muted">
+                    {item.last_rows || "—"}
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => toggle.mutate(item)}
+                      >
+                        {item.enabled ? "Disable" : "Enable"}
+                      </Button>
+                      {!item.builtin && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => remove.mutate(item)}
+                          title="Remove this gate"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </Button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {cfg && (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+              <Label>Min alive</Label>
+              <Input
+                type="number"
+                defaultValue={cfg.min_alive}
+                onBlur={(event) => saveAuto.mutate({ min_alive: Number(event.target.value) })}
+              />
+            </div>
+            <div>
+              <Label>Min TLS-capable</Label>
+              <Input
+                type="number"
+                defaultValue={cfg.min_tls}
+                onBlur={(event) => saveAuto.mutate({ min_tls: Number(event.target.value) })}
+              />
+            </div>
+            <div>
+              <Label>Check every (min)</Label>
+              <Input
+                type="number"
+                defaultValue={cfg.interval_min}
+                onBlur={(event) => saveAuto.mutate({ interval_min: Number(event.target.value) })}
+              />
+            </div>
+            <div>
+              <Label>Harvest target</Label>
+              <Input
+                type="number"
+                defaultValue={cfg.target}
+                onBlur={(event) => saveAuto.mutate({ target: Number(event.target.value) })}
+              />
+            </div>
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-faint">
+          <span>
+            pool now: {cfg?.counts.alive ?? 0} alive · {cfg?.counts.tls ?? 0} TLS-capable
+            {cfg?.busy ? " · harvesting" : ""}
+          </span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => saveAuto.mutate({ enabled: !cfg?.enabled })}
+          >
+            {cfg?.enabled ? "Turn auto-pool off" : "Turn auto-pool on"}
+          </Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -261,6 +486,8 @@ export function SettingsPage() {
           </div>
         </CardContent>
       </Card>
+
+      <SourcesCard />
 
       <Dialog
         open={purgeOpen}

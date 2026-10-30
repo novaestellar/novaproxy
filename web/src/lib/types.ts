@@ -171,3 +171,23 @@ export type ProxyFilters = {
   offset?: number;
   limit?: number;
 };
+export type ProxySource = {
+  url: string;
+  protocol: string;
+  enabled: number;
+  builtin: number;
+  note: string | null;
+  added_at: string;
+  last_ok: string | null;
+  last_rows: number;
+};
+
+export type Autopool = {
+  enabled: boolean;
+  min_alive: number;
+  min_tls: number;
+  interval_min: number;
+  target: number;
+  counts: { alive: number; tls: number; total: number };
+  busy: boolean;
+};

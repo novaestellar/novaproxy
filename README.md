@@ -1,446 +1,356 @@
 ﻿<p align="center">
-  <strong>Self-hosted proxy harvesting console</strong><br>
-  Harvest Â· validate Â· dedupe Â· geo-enrich Â· test any URL through the pool
+  <img src="docs/logo-hero.png" width="340" alt="novaproxy">
+</p>
+
+<h1 align="center">novaproxy</h1>
+
+<p align="center">
+  <strong>本地代理池控制台 · 采集 → 校验 → 去重 → 地理 → 站点检测 → 统一网关</strong><br>
+  <sub>一个 SOCKS5 与一个 HTTP 入口，背后是可轮换、可计量、可限额的代理池</sub>
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
-  <img src="https://img.shields.io/badge/FastAPI-asyncio-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
-  <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React">
-  <img src="https://img.shields.io/badge/SQLite-WAL-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite">
-  <img src="https://img.shields.io/badge/port-12000-8b5cf6?style=flat-square" alt="Port">
+  <img src="https://img.shields.io/badge/python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="python">
+  <img src="https://img.shields.io/badge/fastapi-asyncio-009688?style=flat-square&logo=fastapi&logoColor=white" alt="fastapi">
+  <img src="https://img.shields.io/badge/react-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="react">
+  <img src="https://img.shields.io/badge/storage-SQLite%20WAL-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="sqlite">
+  <img src="https://img.shields.io/badge/console-127.0.0.1%3A12000-8F6FD8?style=flat-square" alt="port">
 </p>
 
 ---
 
-## What this is
+## 一句话说明
 
-novaproxy is a local control panel for building and maintaining a working proxy
-pool, and for serving it as one endpoint. You set a target count; it pulls public
-proxy feeds, validates every candidate against live judges, keeps the survivors,
-removes duplicates, enriches them with geo data â€” then a built-in gateway exposes
-the pool as local SOCKS5 and HTTP, with rotation, failover, byte accounting and
-per-proxy quotas.
+novaproxy 在本机跑一个控制台：它从公开来源采集免费代理，逐条校验连通性、匿名度与 **TLS 隧道能力**，去重、补地理信息，然后把通过校验的代理合并成两个本地入口 —— `SOCKS5 :11500` 和 `HTTP :12500`。任何程序（爬虫、浏览器、CLI 工具）指向其中一个入口，出口 IP 就会在池子里轮换，失败自动换下一个。
 
-It replaces the job of hand-editing a `proxies.txt`, guessing which entries still
-work, and never knowing why a request failed.
+不依赖任何账号，不需要购买订阅，池子来自公开列表；代价是质量由这些免费代理决定，这一点在[实测数据](#实测数据)与[已知限制](#已知限制)里如实写明。
 
-![novaproxy overview](docs/novaproxy-demo-poster.png)
+---
 
-| | |
+## 为什么需要它
+
+直连太容易封，买住宅代理又要账号和预算。中间还有一个空档：**手上有一堆公开代理，但它们是散的、会死的、不知道哪个能用**。
+
+novaproxy 补的就是这个空档：
+
+| 问题 | 处理方式 |
 |---|---|
-| **Backend** | Python 3.12+, FastAPI, asyncio, aiohttp, aiosqlite |
-| **Frontend** | React 19, TypeScript, Vite 6, Tailwind CSS v4 |
-| **Storage** | SQLite (WAL, 10 s busy timeout) |
-| **Realtime** | Server-sent events, one status frame per second |
-| **Auth** | PBKDF2 (200k iterations), HttpOnly `np_session` cookie |
+| 来源散落在十几个仓库和 API | 12 个公开源并行抓取，一次拿全 |
+| 列表里大量已经死掉的地址 | 并发校验，三振出局，死的自动降级 |
+| 能连 HTTP 但过不了 HTTPS | 单独探测 TLS 隧道，`https` 标记真实能力 |
+| 每次换 IP 要改代码 | 一个固定本地入口，后台轮换 |
+| 代理会中途掉线 | 对冲重试 + 首字节与空闲超时，不让你干等 |
+| 不知道哪个代理对某个站点真的好用 | 按目标主机记忆成功率，优先复用 |
 
-## novaproxy vs. novastar
+---
 
-They solve different layers. Neither is a replacement for the other.
+## 核心特性
 
-| | novaproxy | novastar |
-|---|---|---|
-| **Supply** | Public feeds, no accounts | ipstar.io farm / paid account |
-| **IP class** | Datacenter | Residential |
-| **Quota** | Optional per-proxy cap, byte-accurate | 2 GB per farm account, metered per account |
-| **Validation** | 2 judges, anonymity + HTTPS classified, 3-strike death | Repo-level, no per-proxy health history |
-| **Dedupe** | SQL window function, 5 trigger points | Not applicable |
-| **Geo enrichment** | ip-api batch, 100 per call | Not applicable |
-| **URL test** | Up to 200 alive proxies per check | Not available |
-| **Gateway** | SOCKS5 `:11500` + HTTP `:12500`, rotation + failover | SOCKS5 `:1080` + HTTP `:8118`, rotation + failover |
-| **Analytics** | Traffic samples, quota buckets, protocol split | Pool table with per-account bytes |
-| **UI** | React SPA, live SSE, multi-user | Single admin page |
-| **Failure mode** | Yield drops when public lists rot | Whole pool dies when entitlement is revoked |
+| 模块 | 能力 |
+|---|---|
+| **采集** | 12 个公开源（HTTP / SOCKS4 / SOCKS5）+ GeoNode 分页接口，并行下载与解析 |
+| **校验** | 两个判据（httpbin、ip-api）判定存活、匿名度（elite / anonymous / transparent）、响应延迟 |
+| **TLS 隧道探测** | 对每种协议都实测穿过隧道的 HTTPS，写入 `https`；网关只挑真正能过 TLS 的行 |
+| **去重** | SQL 窗口函数按 `ip:port` 保留最健康的一条，重复行自动清除 |
+| **地理补全** | ip-api 批量补国家、城市、ISP |
+| **网关** | SOCKS5 + HTTP 双监听，三种策略（轮询 / 最少使用 / 最快） |
+| **故障切换** | 对冲重试：0.6 秒后起下一个，先握手成功者胜出；3 秒总上限 |
+| **超时护栏** | 首字节 2.5 秒、空闲 3.8 秒即断，最坏请求实测 3.5 秒 |
+| **流量计量** | 双向字节、请求数，2 秒落盘一次 |
+| **配额** | 每个代理可设流量上限，用尽即跳过（支持小数 MB） |
+| **排除 / 恢复** | 一键剔除死行、一键全量恢复，状态持久化 |
+| **目标记忆** | `target_hits` 记录"哪个代理对哪个站点真的通过过"，两次取一，一次探索 |
+| **后台巡检** | 每 30 秒重测 40 条最旧的行，保持 `alive` 与 `https` 新鲜 |
+| **站点检测** | 指定 URL，批量测池子能不能打开它，记录状态码与耗时 |
+| **实时界面** | SSE 每秒推送，深色/浅色主题，中文文件名级别可读 |
+| **鉴权** | 本机（127.0.0.1）免登录；`NP_AUTH=on` 恢复登录；远程访问必须会话 |
 
-Rule of thumb:
+---
 
-- **Bulk, non-identity traffic** (scraping, rate-limit spreading, geo checks,
-  load distribution) â†’ novaproxy. Free, unlimited, disposable.
-- **Identity-sensitive traffic** (signup, anti-bot, per-account isolation) â†’
-  residential. novaproxy cannot help there, by design.
+## 界面
 
-If the residential lane is already covered, novaproxy is strictly additional
-capacity: it never expires, costs nothing, and can be rebuilt from zero in one
-click.
+- 顶部是小狗标志（圆形 + 描边环），左侧七个子页签：overview / pool / gateway / analytics / site check / logs / settings
+- 主题切换在首次绘制前解析，页面不闪白
+- 字体自托管（Nunito + Quicksand），离线也能正确渲染
+- 所有列表支持排序、过滤、分页，导出支持 txt / json
 
-## Demo
+---
 
-A 52-second walkthrough (login â†’ live run â†’ pool â†’ site check â†’ logs â†’ settings):
+## 快速安装
 
-- [`docs/novaproxy-demo.mp4`](docs/novaproxy-demo.mp4) â€” H.264, 1440Ã—900
-- [`docs/novaproxy-demo-poster.png`](docs/novaproxy-demo-poster.png) â€” poster frame
-
-Regenerate it against a local server:
-
-```bash
-python run.py
-.venv/Scripts/python.exe scripts/record_demo.py    # Windows
-# source .venv/bin/activate && python scripts/record_demo.py   # macOS / Linux
-```
-
-The recorder needs Playwright Chromium (`playwright install chromium`); the
-optional MP4 copy needs `pip install imageio-ffmpeg`.
-
-## Requirements
-
-- Python **3.12+**
-- Node.js **20+** â€” only to rebuild the frontend (a prebuilt `web/dist` is included)
-- Playwright Chromium â€” only for signup-gated sources and the demo recorder
-
-## Install and run
+### 方式一：源码（推荐）
 
 ```bash
-cd D:\Labs\novaproxy
+# 1. 取代码
+git clone https://github.com/novaestellar/novaproxy.git
+cd novaproxy
+
+# 2. 建立虚拟环境与依赖
 python -m venv .venv
-.venv\Scripts\activate            # macOS/Linux: source .venv/bin/activate
+# Windows
+.venv\Scripts\activate
+# macOS / Linux
+source .venv/bin/activate
+
 pip install -r requirements.txt
-python run.py
-```
 
-Open **http://127.0.0.1:12000**.
-
-The React build in `web/dist` is served by FastAPI, so no second process is
-needed. If `web/dist` is missing, the API returns a 503 with build instructions.
-
-### Frontend development
-
-```bash
-# terminal 1
-python run.py
-
-# terminal 2
+# 3. 构建前端（仓库里已带 dist，只有改动前端时才需要）
 cd web
 npm install
-npm run dev      # http://127.0.0.1:5173, /api proxied to :12000
+npm run build
+cd ..
+
+# 4. 启动
+python run.py
 ```
 
-| Command | Purpose |
-|---|---|
-| `npm run dev` | Vite dev server with hot reload |
-| `npm run build` | Production build into `web/dist` |
-| `npm run typecheck` | `tsc --noEmit` |
+打开 <http://127.0.0.1:12000> —— 本机访问不需要登录。
 
-### Docker
+### 方式二：Docker
 
 ```bash
 docker build -t novaproxy .
-docker run -d --name novaproxy -p 12000:12000 \
-  -e NP_ADMIN_USER=admin -e NP_ADMIN_PASS=change-me \
+docker run -d --name novaproxy \
+  -p 12000:12000 -p 11500:11500 -p 12500:12500 \
+  -e NP_AUTH=local \
   -e NP_DB=/app/data/novaproxy.db \
-  -v "$(pwd)/data:/app/data" novaproxy
+  -v "$(pwd)/data:/app/data" \
+  novaproxy
 ```
 
-The image builds the frontend in a Node stage, then serves it from Python.
-
-## First run
-
-1. Sign in with the bootstrap account, or create a new one from the login page.
-2. Start a collection, pick a target and protocols, and watch the quota fill.
-3. Open **Pool** to filter, copy, export or recheck proxies.
-4. Open **Site check** to verify the pool against your own target URL.
-
-Bootstrap credentials come from the environment:
+### 方式三：只想立刻用一个入口
 
 ```bash
-NP_ADMIN_USER=admin
-NP_ADMIN_PASS=change-me
+python run.py &
+sleep 8
+curl -s http://127.0.0.1:12000/api/collect \
+  -H 'Content-Type: application/json' \
+  -d '{"target":300,"protocols":["http","socks5"],"rounds":3}'
+# 等采集完成后启动网关
+curl -s -X POST http://127.0.0.1:12000/api/gateway/start
+curl -x http://127.0.0.1:12500 https://httpbin.org/ip
 ```
 
-They are used **only when the users table is empty**. Set a strong password
-before the first start; changing the variables later does not reset an existing
-admin.
+---
 
-Registration is open by default. To make the instance invite-only, remove
-`/register` and `/api/register` from `PUBLIC_PREFIXES` in `app/main.py`.
+## 使用说明
 
-## How it works
+### 1. 采集第一批代理
 
-```
-Browser â”€â”€ React SPA â”€â”€ /api â”€â”€ FastAPI â”€â”€ SQLite
-                              â”‚
-                              â”œâ”€â”€ sources/public.py   12+ public feeds + GeoNode
-                              â”œâ”€â”€ sources/custom.py   temp-mail + Playwright
-                              â”œâ”€â”€ validator.py        concurrent judges
-                              â””â”€â”€ sitecheck.py        arbitrary URL tests
+界面 → **New collection**，或调用 `POST /api/collect`：
+
+```json
+{
+  "target": 300,                       // 想拿到多少条存活
+  "protocols": ["http", "socks4", "socks5"],
+  "rounds": 3                          // 最多抓几轮源
+}
 ```
 
-### Collection loop
+界面右上角会显示进度，`logs` 页能看到每一轮的通过数。实测一轮 300 条大约 2–4 分钟，取决于上游源的速度。
 
-1. Fetch every enabled public feed and drop entries checked in the last 30 minutes.
-2. Sample down to `MAX_CANDIDATES` (12,000) to keep rounds bounded.
-3. Validate at `VALIDATE_CONCURRENCY` (300) with `VALIDATE_TIMEOUT` (8 s) per judge.
-4. Store successes, count a strike for known failures; three strikes mark a proxy dead.
-5. Deduplicate, enrich geo data, then repeat if the target is still unmet.
+### 2. 看池子
 
-Rounds after the first wait 10 minutes, because free lists rotate hourly.
-Final states: `done`, `stopped`, `exhausted`.
+**pool** 页：按协议、国家、匿名度过滤；每行显示延迟、TLS 能力、最近校验时间、已用流量。可以单条测试、设配额、排除。
 
-### Judges
+### 3. 启动网关
 
-Each candidate is tried against two independent judges, in order:
-
-1. `http://httpbin.org/get` â€” echoes request headers, used for anonymity class.
-2. `http://ip-api.com/json` â€” independent reachability + egress IP.
-
-Latency is measured only on the attempt that actually answered. Anonymity is
-classified as `elite` (no `Via`, no `X-Forwarded-For`), `anonymous` (headers
-present, origin not leaked) or `transparent` (origin appears in `X-Forwarded-For`).
-HTTPS capability is probed separately for HTTP proxies.
-
-### Deduplication
-
-Rows are partitioned by `ip:port`. The survivor is chosen by:
-
-1. alive before dead
-2. HTTPS-capable before plain
-3. lowest latency
-4. most recent check
-
-Duplicates are removed at startup, when a run starts, after every round, after a
-recheck, and from **Settings â†’ Remove duplicates**. The number removed is written
-to the engine log.
-
-### Site check
-
-- Runs only against proxies currently marked alive.
-- The request is made **through each proxy** to the URL you enter.
-- Passed means the response status is below 400.
-- The hard ceiling per proxy is `timeout + 2 s`, so a stalling proxy cannot hold
-  the whole batch.
-- Results are upserted into `site_checks` and are available from
-  `GET /api/site-checks`.
-
-### Geo enrichment
-
-Alive proxies without a country are sent to the ip-api batch endpoint in groups
-of 100, capped at `GEO_MAX` per run, with a 4-second gap between groups.
-
-## Gateway
-
-The gateway turns the pool into one local endpoint, so applications do not need a
-proxy list â€” they need one address.
-
-| Listener | Default | Protocol |
-|---|---|---|
-| SOCKS5 | `127.0.0.1:11500` | SOCKS5 CONNECT, no auth on the client side |
-| HTTP | `127.0.0.1:12500` | `CONNECT` tunnels + absolute-URI forwarding |
+**gateway** 页 → **Start gateway**。之后任何程序都能：
 
 ```bash
-# HTTP
-curl -x http://127.0.0.1:12500 https://api.ipify.org
+# HTTP 入口（同时支持 CONNECT 与绝对 URI）
+curl -x http://127.0.0.1:12500 https://httpbin.org/ip
 
-# SOCKS5
-curl --socks5-hostname 127.0.0.1:11500 https://api.ipify.org
+# SOCKS5 入口
+curl --socks5-hostname 127.0.0.1:11500 https://httpbin.org/ip
+
+# Python requests
+proxies = {"http": "http://127.0.0.1:12500", "https": "http://127.0.0.1:12500"}
 ```
 
-Behaviour, mirroring what novastar's residential gateway got right:
+同一个入口连续请求，出口 IP 会变；某个代理失效会自动换下一个，不用你处理。
 
-- **Rotation** â€” `round_robin`, `least_used` or `fastest`, selected in Settings.
-- **Failover** â€” one failed upstream does not fail the request; the next eligible
-  proxy is tried. Failures accrue; three marks the row dead.
-- **Quota** â€” every relayed byte is counted per proxy (`bytes_in`, `bytes_out`),
-  with an optional allowance in MB. A proxy at its cap is skipped before the
-  connection opens, not after the upstream rejects it.
-- **Exclusion** â€” drop a proxy from rotation without deleting it; restore it in
-  one click.
-- **Live counters** â€” connections, active relays, failures, bytes both ways.
+### 4. 站点检测
 
-Ports and quota are persisted in the database (table `kv`), so a restart keeps
-them. Changing ports requires stopping and starting the gateway.
+**site check** 页：填目标 URL，选 25/50/100/200 条代理，跑一次就知道池子对那个站点到底通不通。结果记录状态码、延迟、错误原因。
 
-## Analytics
+### 5. 日常维护
 
-The Analytics page reads aggregates over the same database: pool composition,
-relayed bytes per protocol, quota distribution (`fresh` / `half` / `exhausted` /
-`unlimited`), the busiest proxies, site-check pass rate, and a traffic sparkline
-built from 30-second samples written while the gateway is running.
+| 动作 | 什么时候做 |
+|---|---|
+| `Scan pool` | 感觉成功率掉了，或隔了几小时没用 |
+| `Drop dead` | 想让死行彻底离开轮换 |
+| `Restore` | 想给池子一次重新证明的机会 |
+| 重新采集 | 池子缩水到一半以下，或换地区需求 |
 
-## Configuration
+---
 
-Environment variables:
+## 网关详解
 
-| Variable | Default | Meaning |
+| 端口 | 协议 | 说明 |
 |---|---|---|
-| `NP_DB` | `novaproxy.db` | SQLite database path |
-| `NP_ADMIN_USER` | `admin` | Bootstrap username |
-| `NP_ADMIN_PASS` | `admin123` | Bootstrap password, first run only |
+| `127.0.0.1:11500` | SOCKS5 | 支持 CONNECT，客户端侧无认证 |
+| `127.0.0.1:12500` | HTTP | 支持 `CONNECT` 隧道与绝对 URI 转发 |
 
-`app/config.py`:
+**策略**
 
-| Key | Default | Meaning |
+| 策略 | 排序方式 | 适合 |
 |---|---|---|
-| `VALIDATE_TIMEOUT` | `8` | Seconds per judge attempt |
-| `VALIDATE_CONCURRENCY` | `300` | Simultaneous validations |
-| `MAX_FAILED_CHECKS` | `3` | Consecutive failures before dead |
-| `MAX_CANDIDATES` | `12000` | Candidates sampled per round |
-| `AUTO_DEDUPE` | `True` | Remove duplicates automatically |
-| `SITE_CHECK_TIMEOUT` | `10` | Default per-proxy timeout in seconds |
-| `SITE_CHECK_LIMIT` | `100` | Default proxies per site check |
-| `SITE_CHECK_CONCURRENCY` | `50` | Parallel site checks |
-| `GEO_ENRICH` | `True` | Enable ip-api enrichment |
-| `GEO_MAX` | `2000` | Proxies enriched per run |
-| `SIGNUP_SOURCES` | `[]` | Optional signup-gated source definitions |
-| `GATEWAY` | see below | Gateway runtime settings, persisted in `kv` |
+| `round_robin` | 按 `last_used` 最久未用优先，再按新鲜度 | 通用，出口 IP 分散 |
+| `least_used` | 请求数最少优先 | 长时间低频、想摊平用量 |
+| `fastest` | 已验证且延迟最低优先 | 对延迟敏感 |
 
-Gateway defaults (editable from the UI, stored in the database):
+**时间护栏（可在界面改）**
 
-| Key | Default | Meaning |
+| 参数 | 默认 | 作用 |
 |---|---|---|
-| `socks_port` | `11500` | SOCKS5 listener |
-| `http_port` | `12500` | HTTP listener |
-| `strategy` | `round_robin` | `round_robin` Â· `least_used` Â· `fastest` |
-| `quota_mb` | `0` | Per-proxy allowance; `0` = unlimited |
-| `timeout` | `12` | Upstream connect timeout (seconds) |
-| `max_fails` | `3` | Failures before a proxy is marked dead |
+| `deadline` | 3.0 秒 | 整个重试阶梯的总上限 |
+| `hedge_delay` | 0.6 秒 | 下一个尝试提前多久起跑 |
+| `retries` | 4 | 单请求最多试几个代理 |
+| `first_byte_timeout` | 2.5 秒 | 隧道通了但上游不说话，多久放弃 |
+| `idle_timeout` | 3.8 秒 | 传输中停住多久切断 |
 
-## Signup-gated sources
+**为什么是"对冲"而不是"重试"**
 
-Sources behind a free registration wall can be driven by the optional temp-mail +
-headless Chromium flow. Define them in `SIGNUP_SOURCES`:
+免费代理的典型死法是**挂着不回**，不是立刻拒绝。串行重试会把预算全花在等第一个超时上，表现出来就是"卡住"。对冲让第二个在 0.6 秒后同时起跑，先握手成功的那个胜出，其余取消。
 
-```python
-SIGNUP_SOURCES = [{
-    "name": "example",
-    "signup_url": "https://example.com/register",
-    "login_url": "https://example.com/login",
-    "proxies_url": "https://example.com/dashboard/proxies",
-    "email_verification": True,
-    "verification_mode": "link",          # or "code"
-    "code_selector": "input[name=code]",  # only for "code"
-    "accounts": 3,
-    "selectors": {
-        "email": "input[name=email]",
-        "password": "input[name=password]",
-        "submit": "button[type=submit]",
-        "proxies": ".proxy-list",
-    },
-}]
-```
+---
 
-Install the browser once:
+## 实测数据
 
-```bash
-playwright install chromium
-```
+同一台机器、同一目标（`https://api.ipify.org`）、同一脚本，30 次顺序 + 30 次并发 ×10：
 
-Keep **Signup-gated sources** enabled in the collection dialog to use them.
-Sites protected by CAPTCHA are out of scope for this flow.
+| 场景 | 成功率 | 中位延迟 | 最慢 |
+|---|---|---|---|
+| 冷启动（无目标历史） | 19/30 · 63% | 1.7 s | 3.6 s |
+| 目标记忆生效（重复目标） | 26/30 · **87%** | 1.0 s | 2.6 s |
+| 同上并发 ×10 | 27/30 · **90%** | 1.5 s | 3.4 s |
+| 打开探索（IP 更分散，11 个出口） | 23/30 · 77% | 1.8 s | 2.9 s |
 
-## API
+池子规模随上游变化，某次实测：**951 条存活**，其中 **77 条真正能过 TLS**（这是关键数字，不是存活数）。
 
-All routes except login/register require the `np_session` cookie.
+没有任何一次请求超过 7 秒；上表最慢为 3.6 秒。
 
-| Method | Path | Purpose |
+---
+
+## 配置
+
+### 环境变量（`.env`，全部可选）
+
+| 变量 | 默认 | 作用 |
 |---|---|---|
-| `POST` | `/api/login` | Form login, sets the session cookie |
-| `POST` | `/api/register` | Create an account and sign in |
-| `POST` | `/api/logout` | Destroy the session |
-| `GET` | `/api/me` | Current user |
-| `POST` | `/api/collect` | `{target, protocols[], rounds, use_custom}` |
-| `POST` | `/api/stop` | Cancel the active run or recheck |
-| `GET` | `/api/status` | Snapshot including the last 150 log lines |
-| `GET` | `/api/stream` | Server-sent events, one status frame per second |
-| `GET` | `/api/stats` | Pool totals, protocol, anonymity, country and latency aggregates |
-| `GET` | `/api/settings` | Effective runtime configuration |
-| `GET` | `/api/proxies` | Filters: `protocol, country, anonymity, q, sort, offset, limit` |
-| `GET` | `/api/proxies/export` | `?fmt=txt\|json`, optional `?protocol=` |
-| `POST` | `/api/proxies/recheck` | Revalidate the alive pool |
-| `POST` | `/api/proxies/purge-dead` | Delete dead rows |
-| `POST` | `/api/proxies/dedupe` | Remove duplicate endpoints |
-| `POST` | `/api/proxies/test` | Test alive proxies against a URL |
-| `GET` | `/api/site-checks` | Stored site-check results |
-| `GET` | `/api/gateway` | Gateway state, counters, warnings |
-| `POST` | `/api/gateway/start` | Start SOCKS5 + HTTP listeners |
-| `POST` | `/api/gateway/stop` | Stop listeners |
-| `POST` | `/api/gateway/settings` | Patch ports, strategy, quota, timeout, max fails |
-| `GET` | `/api/analytics` | Pool, traffic, quota and site-check aggregates |
-| `POST` | `/api/proxies/quota` | `{mb, scope:"all"}` or `{mb, items:[...]}` |
-| `POST` | `/api/proxies/exclude` | `{excluded, scope:"all"}` or `{excluded, items:[...]}` |
+| `NP_DB` | `novaproxy.db` | SQLite 路径 |
+| `NP_HOST` | `127.0.0.1` | 控制台绑定地址 |
+| `NP_PORT` | `12000` | 控制台端口 |
+| `NP_LOG` | `info` | uvicorn 日志级别 |
+| `NP_AUTH` | `local` | `local` 本机免登录；`on` 强制登录 |
+| `NP_ADMIN_USER` | `admin` | 首次启动创建的账号 |
+| `NP_ADMIN_PASS` | `admin123` | 首次启动创建的密码 |
 
-Example:
+`app/config.py` 里还有校验并发、超时、地理补全、站点检测等常量。
 
-```bash
-curl -c cookies.txt \
-  -d 'username=admin&password=change-me' \
-  http://127.0.0.1:12000/api/login
+### 网关参数（界面保存，落库）
 
-curl -b cookies.txt \
-  'http://127.0.0.1:12000/api/proxies/export?protocol=socks5' \
-  -o socks5.txt
-```
+`strategy` · `quota_mb` · `timeout` · `max_fails` · `retries` · `hedge_delay` · `deadline` · `first_byte_timeout` · `idle_timeout` · `health_interval` · `health_batch` · `socks_port` · `http_port`
 
-## Data
+端口改动需要 stop / start 一次，其余即时生效。
 
-- `novaproxy.db` â€” users, sessions, proxy pool, site-check history
-- SQLite runs in WAL mode with a 10-second busy timeout
-- Delete the database to start over; the admin account is recreated from the
-  environment on the next start
+---
 
-## Project layout
+## HTTP API
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| POST | `/api/collect` | 开始采集 |
+| POST | `/api/stop` | 停止采集 |
+| GET | `/api/status` | 采集进度 |
+| GET | `/api/stream` | SSE 实时日志 |
+| GET | `/api/stats` | 概览统计 |
+| GET | `/api/proxies` | 池子列表（过滤/排序/分页） |
+| GET | `/api/proxies/export` | 导出 txt / json |
+| POST | `/api/proxies/test` | 单条或批量测试 |
+| POST | `/api/proxies/quota` | 设置流量配额 |
+| POST | `/api/proxies/exclude` | 排除 / 恢复 |
+| POST | `/api/proxies/recheck` | 重新校验 |
+| POST | `/api/proxies/dedupe` | 去重 |
+| POST | `/api/proxies/purge-dead` | 清理死行 |
+| GET | `/api/gateway` | 网关状态 |
+| POST | `/api/gateway/start` \| `stop` | 启动 / 停止 |
+| POST | `/api/gateway/scan` | 全池重新校验（含 TLS） |
+| POST | `/api/gateway/drop-dead` | 剔除死行 |
+| POST | `/api/gateway/restore` | 恢复全部 |
+| POST | `/api/gateway/settings` | 更新网关参数 |
+| GET | `/api/analytics` | 流量样本、协议分布、配额状态 |
+| GET | `/api/site-checks` | 站点检测历史 |
+| POST | `/api/proxies/test` | 指定 URL 的连通性测试 |
+
+---
+
+## 目录结构
 
 ```
 novaproxy/
-â”œâ”€â”€ run.py
-â”œâ”€â”€ requirements.txt
-â”œâ”€â”€ Dockerfile
-â”œâ”€â”€ .env.example
-â”œâ”€â”€ app/
-â”‚   â”œâ”€â”€ main.py          API, auth, SSE, SPA hosting
-â”‚   â”œâ”€â”€ engine.py        collection loop, dedupe, recheck
-â”‚   â”œâ”€â”€ gateway.py       SOCKS5 + HTTP gateway, rotation, quota metering
-â”‚   â”œâ”€â”€ validator.py     concurrent proxy judges
-â”‚   â”œâ”€â”€ sitecheck.py     URL tests through proxies
-â”‚   â”œâ”€â”€ sources/
-â”‚   â”‚   â”œâ”€â”€ public.py
-â”‚   â”‚   â””â”€â”€ custom.py
-â”‚   â”œâ”€â”€ security.py
-â”‚   â”œâ”€â”€ database.py
-â”‚   â”œâ”€â”€ tempmail.py
-â”‚   â””â”€â”€ config.py
-â”œâ”€â”€ web/
-â”‚   â”œâ”€â”€ src/             React pages, components, API client
-â”‚   â”œâ”€â”€ dist/            production build served by FastAPI
-â”‚   â””â”€â”€ package.json
-â”œâ”€â”€ scripts/
-â”‚   â””â”€â”€ record_demo.py   demo recorder
-â””â”€â”€ docs/
-    â”œâ”€â”€ novaproxy-demo.mp4
-    â””â”€â”€ novaproxy-demo-poster.png
+├── app/
+│   ├── main.py          # FastAPI 路由、鉴权中间件、静态资源
+│   ├── gateway.py       # SOCKS5 / HTTP 网关、对冲重试、计量、巡检
+│   ├── engine.py        # 采集流程编排
+│   ├── validator.py     # 校验判据与 TLS 隧道探测
+│   ├── database.py      # 模式、迁移、写入锁
+│   ├── security.py      # PBKDF2 口令、会话
+│   ├── sitecheck.py     # 站点检测
+│   ├── config.py        # 常量与环境变量
+│   └── sources/public.py# 公开源清单与抓取
+├── web/                 # React 19 + Vite 6 + Tailwind 4
+│   ├── src/pages/       # 七个页面
+│   ├── src/components/  # 外壳、卡片、对话框
+│   └── public/          # 字体、图标、标志
+├── docs/                # 截图与品牌资源
+├── run.py               # 启动入口（NP_HOST / NP_PORT）
+├── requirements.txt
+├── Dockerfile
+└── README.md
 ```
 
-## Packaging
+---
 
-When creating a zip for distribution, exclude generated or local-only files:
+## 常见问题
 
-```
-.venv/
-web/node_modules/
-**/__pycache__/
-*.db
-*.db-wal
-*.db-shm
-docs/raw/
-```
+**Q：为什么成功率不是 100%？**
+免费池里真正能过 TLS 的只有约 8–10%。剩下的失败分两类：握手前失败（会被对冲重试吃掉），以及握手成功后代理中途死掉（客户端已经收到 `200 Connection Established`，无法再换出口）。后者是理论上限，不是实现缺陷。
 
-Include `web/dist/` if you want the app to run without a Node build step.
-Exclude the database to ship a clean instance that bootstraps the admin from
-`NP_ADMIN_USER` / `NP_ADMIN_PASS` on first start.
+**Q：为什么 `alive` 很多，但能过 TLS 的很少？**
+因为"能访问 HTTP"和"能承载 HTTPS 隧道"是两种能力。很多公开代理只转发明文，`CONNECT` 直接被拒。novaproxy 对每个协议都实测后者并单独记录。
 
-## Troubleshooting
+**Q：能替代住宅代理吗？**
+不能，也不该这么用。住宅代理有真实 ISP 出口，免费池是数据中心与家用宽带混杂、寿命以分钟计。要稳定出口，仍然要买住宅/机房代理；novaproxy 解决的是"零成本、够用、可控"这一档。
 
-| Symptom | Fix |
-|---|---|
-| `Frontend not built` (503) | `cd web && npm install && npm run build` |
-| 0 alive after a full round | Raise rounds, enable SOCKS, or run again later |
-| SOCKS validation errors | `pip install aiohttp-socks` |
-| Site check always fails | Free proxies often reject HTTPS `CONNECT`; try an `http://` target or another protocol |
-| Signup module does nothing | Configure `SIGNUP_SOURCES` and run `playwright install chromium` |
-| SSE badge reconnecting | A reverse proxy is buffering; the endpoint sends `X-Accel-Buffering: no` for nginx |
+**Q：本机访问为什么没有登录页？**
+`NP_AUTH=local` 时，来自 127.0.0.1 的请求被视为操作者本人。想恢复登录页，用 `NP_AUTH=on` 启动；来自其他机器的请求始终需要会话。
 
-## Legal
+**Q：端口能改吗？**
+能。控制台用 `NP_PORT`，网关在界面里改（`socks_port` / `http_port`），改完 stop/start 一次生效。
 
-novaproxy aggregates proxies published openly and for free by their maintainers.
-Respect each source's terms of service. Free proxies are operated by strangers â€”
-never send credentials, personal data or anything sensitive through them. Use the
-tool for legitimate testing, scraping and research.
+**Q：数据存在哪？**
+一个 SQLite 文件（默认 `novaproxy.db`），WAL 模式。备份就是复制这个文件（及其 `-wal`、`-shm`）。
+
+---
+
+## 已知限制
+
+- 出口质量取决于公开源，随时可能整体变差
+- 无法在隧道建立后重试，只能靠上层客户端重发
+- 高并发（10 路以上）会下降，瓶颈是免费代理的承载能力
+- 目标记忆会收窄出口 IP 范围，需要分散时把探索比例调高
+- 没有 IPv6 专用池
+
+---
+
+## 免责声明
+
+本项目抓取的代理由各自的维护者公开发布，novaproxy 只做聚合、校验与本地转发。请自行确认对目标站点的访问符合其服务条款与当地法律。使用者对通过本工具发起的请求负责。
+
+---
+
+<p align="center">
+  <sub>novaproxy · 本地代理池控制台 · 界面自托管，无遥测，无外部依赖</sub>
+</p>

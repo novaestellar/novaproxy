@@ -1,13 +1,28 @@
-﻿.venv/
+﻿# runtime state
+.venv/
 __pycache__/
 *.py[cod]
 *.db
 *.db-wal
 *.db-shm
-web/node_modules/
-.DS_Store
-docs/raw/
+.env
 
-# local smoke artifacts
+# frontend
+web/node_modules/
+web/.vite/
+
+# local smoke runs
 .smoke.*
 *.cookies
+*.log
+
+# editors / os
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# heavy or private material
+docs/raw/
+playwright-report/
+test-results/

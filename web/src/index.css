@@ -252,14 +252,12 @@
   display: grid;
   place-items: center;
   overflow: hidden;
-  border-radius: 16px;
-  background: var(--color-accent-soft);
-  color: var(--color-accent);
-  font-family: "Quicksand", sans-serif;
-  font-weight: 700;
-  font-size: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.45);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 6px 16px -6px rgba(0, 0, 0, 0.35);
+  border-radius: 50%;
+  background: transparent;
+  transition: transform 0.3s ease;
+}
+.nova-header:hover .nova-mark {
+  transform: rotate(-4deg) scale(1.04);
 }
 .nova-mark img {
   width: 100%;

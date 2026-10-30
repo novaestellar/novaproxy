@@ -20,6 +20,7 @@ from app.security import (create_user, get_user, verify_password,
                           create_session, session_user, destroy_session)
 from app.engine import engine
 from app.gateway import gateway
+from app.sources import public
 from app import sitecheck
 
 DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -36,8 +37,10 @@ async def lifespan(app: FastAPI):
     async with db().execute("SELECT COUNT(*) c FROM users") as cur:
         if (await cur.fetchone())["c"] == 0:
             await create_user(ADMIN_USERNAME, ADMIN_PASSWORD, is_admin=True)
-            print(f"!! bootstrapped admin '{ADMIN_USERNAME}' — change the default password")
+            print(f"!! bootstrapped admin '{ADMIN_USERNAME}' - change the default password")
+    autopool_task = asyncio.create_task(_autopool_loop())
     yield
+    autopool_task.cancel()
     await gateway.stop()
 
 
@@ -592,9 +595,144 @@ async def api_analytics():
 
 
 
+# ── source registry + auto pool ────────────────────────────────────────
+AUTOPOOL_DEFAULTS = {
+    "enabled": True,
+    "min_alive": 250,
+    "min_tls": 35,
+    "interval_min": 20,
+    "target": 500,
+}
+
+
+async def _kv_get(key: str) -> dict:
+    async with db().execute("SELECT value FROM kv WHERE key=?", (key,)) as cur:
+        row = await cur.fetchone()
+    if not row:
+        return {}
+    try:
+        return json.loads(row["value"])
+    except Exception:
+        return {}
+
+
+async def _kv_set(key: str, value: dict) -> None:
+    await execute(
+        "INSERT INTO kv (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (key, json.dumps(value)),
+    )
+
+
+async def _autopool_cfg() -> dict:
+    cfg = dict(AUTOPOOL_DEFAULTS)
+    cfg.update(await _kv_get("autopool"))
+    return cfg
+
+
+async def _pool_counts() -> dict:
+    async with db().execute(
+        "SELECT COALESCE(SUM(alive),0) alive, "
+        "COALESCE(SUM(CASE WHEN alive=1 AND https=1 THEN 1 ELSE 0 END),0) tls, "
+        "COUNT(*) total FROM proxies"
+    ) as cur:
+        row = await cur.fetchone()
+    return {"alive": row["alive"], "tls": row["tls"], "total": row["total"]}
+
+
+async def _autopool_loop() -> None:
+    """Keep the pool from draining: harvest again when it falls below the floor.
+
+    The loop polls every 30 s so a settings change takes effect immediately,
+    and remembers when it last ran so `interval_min` still throttles it.
+    """
+    last = 0.0
+    while True:
+        try:
+            cfg = await _autopool_cfg()
+            interval = max(60.0, float(cfg["interval_min"]) * 60.0)
+            if cfg["enabled"] and not engine.busy() and time.time() - last >= interval:
+                counts = await _pool_counts()
+                if counts["alive"] < cfg["min_alive"] or counts["tls"] < cfg["min_tls"]:
+                    last = time.time()
+                    engine.log("info", f"auto-pool: alive {counts['alive']} / tls "
+                                       f"{counts['tls']} below floor — harvesting "
+                                       f"{cfg['target']}")
+                    await engine.start(int(cfg["target"]),
+                                       ["http", "socks4", "socks5"], 2, False)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            engine.log("warn", f"auto-pool error: {type(exc).__name__}: {exc}")
+        await asyncio.sleep(30)
+
+
+@app.get("/api/sources")
+async def api_sources():
+    async with db().execute(
+        "SELECT url, protocol, enabled, builtin, note, added_at, last_ok, last_rows "
+        "FROM sources ORDER BY enabled DESC, builtin DESC, protocol, url"
+    ) as cur:
+        items = [dict(r) for r in await cur.fetchall()]
+    return {"items": items}
+
+
+@app.post("/api/sources")
+async def api_source_add(request: Request):
+    body = await request.json()
+    url = str(body.get("url", "")).strip()
+    protocol = str(body.get("protocol", "http"))
+    if not url.startswith(("http://", "https://")) or protocol not in ("http", "socks4", "socks5"):
+        return JSONResponse(
+            {"error": "url must start with http(s):// and protocol be http|socks4|socks5"},
+            status_code=400)
+    rows, detail = await public.probe(url, protocol)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S")
+    await execute(
+        "INSERT INTO sources (url, protocol, enabled, builtin, note, last_rows, last_ok) "
+        "VALUES (?,?,?,?,?,?,?) ON CONFLICT(url, protocol) DO UPDATE SET "
+        "enabled=1, last_rows=excluded.last_rows, last_ok=excluded.last_ok, "
+        "note=excluded.note",
+        (url, protocol, 1, 0, body.get("note"), rows, now if rows else None),
+    )
+    return {"ok": True, "rows": rows, "detail": detail}
+
+
+@app.post("/api/sources/toggle")
+async def api_source_toggle(request: Request):
+    body = await request.json()
+    await execute("UPDATE sources SET enabled=? WHERE url=? AND protocol=?",
+                  (1 if body.get("enabled") else 0, body.get("url"), body.get("protocol")))
+    return {"ok": True}
+
+
+@app.post("/api/sources/remove")
+async def api_source_remove(request: Request):
+    body = await request.json()
+    await execute("DELETE FROM sources WHERE url=? AND protocol=? AND builtin=0",
+                  (body.get("url"), body.get("protocol")))
+    return {"ok": True}
+
+
+@app.get("/api/autopool")
+async def api_autopool():
+    cfg = await _autopool_cfg()
+    return {**cfg, "counts": await _pool_counts(), "busy": engine.busy()}
+
+
+@app.post("/api/autopool")
+async def api_autopool_set(request: Request):
+    body = await request.json()
+    cfg = await _autopool_cfg()
+    for key in AUTOPOOL_DEFAULTS:
+        if key in body:
+            cfg[key] = bool(body[key]) if key == "enabled" else int(body[key])
+    await _kv_set("autopool", cfg)
+    return cfg
+
+
 if (DIST / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
-
 
 @app.get("/{full_path:path}", response_class=HTMLResponse)
 async def spa(full_path: str):

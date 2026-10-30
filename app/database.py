@@ -72,6 +72,18 @@ CREATE TABLE IF NOT EXISTS target_hits (
     PRIMARY KEY (host, ip, port, protocol)
 );
 CREATE INDEX IF NOT EXISTS idx_target_hits_host ON target_hits(host, ok);
+
+CREATE TABLE IF NOT EXISTS sources (
+    url TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    builtin INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    added_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    last_ok TEXT,
+    last_rows INTEGER DEFAULT 0,
+    PRIMARY KEY (url, protocol)
+);
 """
 
 _PROXY_MIGRATIONS = {
@@ -95,6 +107,7 @@ async def init_db() -> aiosqlite.Connection:
     await _conn.execute("PRAGMA busy_timeout=10000")
     await _conn.executescript(_SCHEMA)
     await _migrate(_conn)
+    await _seed_sources(_conn)
     await _conn.commit()
     _write_lock = __import__("asyncio").Lock()
     return _conn
@@ -108,6 +121,18 @@ async def _migrate(conn: aiosqlite.Connection) -> None:
         if column not in existing:
             await conn.execute(f"ALTER TABLE proxies ADD COLUMN {column} {ddl}")
 
+
+
+async def _seed_sources(conn: aiosqlite.Connection) -> None:
+    """Install the built-in feeds once; the table is the live registry after."""
+    from app.sources import public
+
+    rows = [(url, protocol, 1, 1)
+            for protocol, urls in public.RAW.items()
+            for url in urls]
+    await conn.executemany(
+        "INSERT OR IGNORE INTO sources (url, protocol, enabled, builtin) "
+        "VALUES (?,?,?,?)", rows)
 
 
 def db() -> aiosqlite.Connection:
