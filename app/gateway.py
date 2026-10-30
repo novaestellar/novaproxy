@@ -813,16 +813,39 @@ class Gateway:
         self._sticky[session] = {"proxy": proxy, "last": time.time()}
         return proxy
 
-    async def _sticky_proxy(self, key: str, host: str) -> dict | None:
+    async def _sticky_proxy(self, key: str, host: str,
+                            port: int = 443) -> dict | None:
+        """Return the pin for this session, creating one that provably works.
+
+        Picking blind and hoping is what made a multi-step flow die at the
+        second call: the exit answered CONNECT for one host and refused the
+        next. A pin is therefore only installed after a real CONNECT to the
+        host this session is talking to.
+        """
         self._sticky_prune()
         entry = self._sticky.get(key)
         if entry:
             entry["last"] = time.time()
             return entry["proxy"]
-        proxy = await self._pick(require_tunnel=True, host=host)
-        if proxy:
+
+        tried: set[tuple[str, int, str]] = set()
+        for _ in range(max(1, int(self.settings["retries"]))):
+            proxy = await self._pick(require_tunnel=True, host=host, avoid=tried)
+            if not proxy:
+                return None
+            tried.add((proxy["ip"], int(proxy["port"]), proxy["protocol"]))
+            try:
+                _up_r, up_w = await self._open(proxy, host, port)
+            except Exception as exc:  # noqa: BLE001
+                await self._mark_failed(proxy, f"sticky probe: {exc}"[:120])
+                continue
+            try:
+                up_w.close()
+            except Exception:
+                pass
             self._sticky[key] = {"proxy": proxy, "last": time.time()}
-        return proxy
+            return proxy
+        return None
 
     def _sticky_drop(self, key: str) -> None:
         self._sticky.pop(key, None)
