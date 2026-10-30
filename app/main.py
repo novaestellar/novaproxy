@@ -413,6 +413,27 @@ async def api_site_checks(url: str | None = None, limit: int = 100):
 
 
 # ── gateway api ────────────────────────────────────────────────────────
+@app.post("/api/gateway/sticky/pin")
+async def api_sticky_pin(request: Request):
+    """Pin one exact proxy to a sticky session (manual backup for egress)."""
+    body = await request.json()
+    session = str(body.get("session") or "").strip()
+    if not session:
+        return JSONResponse({"error": "session required"}, status_code=400)
+    proxy = await gateway._sticky_pin(session, str(body.get("ip", "")),
+                                      int(body.get("port", 0)),
+                                      str(body.get("protocol", "http")))
+    if not proxy:
+        return JSONResponse({"error": "proxy not found"}, status_code=404)
+    return {"ok": True, "session": session, "pinned": proxy}
+
+
+@app.post("/api/gateway/sticky/clear")
+async def api_sticky_clear():
+    gateway._sticky.clear()
+    return {"ok": True, "sessions": 0}
+
+
 @app.get("/api/gateway")
 async def api_gateway():
     return await gateway.snapshot()

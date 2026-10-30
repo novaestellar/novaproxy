@@ -38,6 +38,8 @@ DEFAULT_SETTINGS = {
     "max_fails": 2,
     "max_per_proxy": 2,              # concurrent client tunnels per row
     "host_block_minutes": 10,        # cool-off after a 429 from a target
+    "sticky_port": 12501,            # one exit pinned per session
+    "sticky_ttl": 300,               # seconds a pin survives idle
     "retries": 4,                    # upstream attempts per client request
     "hedge_delay": 0.6,              # start the next attempt this early
     "deadline": 3.0,                 # hard ceiling for opening a tunnel
@@ -104,6 +106,7 @@ class Gateway:
         self._inflight: dict[tuple[str, int, str], int] = {}
         self._blocked_cache: dict[str, tuple[float, set]] = {}
         self._last_status = 0
+        self._sticky: dict[str, dict] = {}
         self._sample = {"in": 0, "out": 0, "req": 0, "at": time.time()}
 
     # ── settings ────────────────────────────────────────────────────
@@ -137,7 +140,7 @@ class Gateway:
                 continue
             if key in ("socks_port", "http_port", "max_fails", "retries",
                        "health_batch", "verified_window", "max_per_proxy",
-                       "host_block_minutes"):
+                       "host_block_minutes", "sticky_port", "sticky_ttl"):
                 value = int(value)
             elif key in ("timeout", "quota_mb", "health_interval", "hedge_delay",
                          "deadline", "first_byte_timeout", "idle_timeout"):
@@ -169,6 +172,8 @@ class Gateway:
                                            int(self.settings["socks_port"])),
                 await asyncio.start_server(self._handle_http, host,
                                            int(self.settings["http_port"])),
+                await asyncio.start_server(self._handle_sticky, host,
+                                           int(self.settings["sticky_port"])),
             ]
         except OSError as exc:
             await self.stop()
@@ -183,7 +188,8 @@ class Gateway:
         self._warm_task = asyncio.create_task(self._health_pass())
         return {"ok": True,
                 "socks": f"{host}:{self.settings['socks_port']}",
-                "http": f"{host}:{self.settings['http_port']}"}
+                "http": f"{host}:{self.settings['http_port']}",
+                "sticky": f"{host}:{self.settings['sticky_port']}"}
 
     async def stop(self) -> dict:
         self.running = False
@@ -786,6 +792,158 @@ class Gateway:
             except Exception:
                 pass
 
+    # ── sticky sessions ─────────────────────────────────────────────
+    def _sticky_prune(self) -> None:
+        ttl = float(self.settings["sticky_ttl"])
+        now = time.time()
+        for key in [k for k, v in self._sticky.items() if now - v["last"] > ttl]:
+            self._sticky.pop(key, None)
+
+    async def _sticky_pin(self, session: str, ip: str, port: int,
+                          protocol: str = "http") -> dict | None:
+        """Pin an exact row to a session (operator-chosen, not auto-picked)."""
+        async with db().execute(
+            "SELECT ip, port, protocol, latency_ms FROM proxies "
+            "WHERE ip=? AND port=? AND protocol=?", (ip, int(port), protocol)
+        ) as cur:
+            row = await cur.fetchone()
+        if not row:
+            return None
+        proxy = dict(row)
+        self._sticky[session] = {"proxy": proxy, "last": time.time()}
+        return proxy
+
+    async def _sticky_proxy(self, key: str, host: str) -> dict | None:
+        self._sticky_prune()
+        entry = self._sticky.get(key)
+        if entry:
+            entry["last"] = time.time()
+            return entry["proxy"]
+        proxy = await self._pick(require_tunnel=True, host=host)
+        if proxy:
+            self._sticky[key] = {"proxy": proxy, "last": time.time()}
+        return proxy
+
+    def _sticky_drop(self, key: str) -> None:
+        self._sticky.pop(key, None)
+
+    async def _handle_sticky(self, reader, writer) -> None:
+        """HTTP listener that pins one upstream per session.
+
+        A registration flow makes half a dozen calls; rotating between them is
+        what breaks the session, so this listener picks once and keeps it.
+        """
+        key = ""
+        try:
+            head = b""
+            while b"\r\n\r\n" not in head and len(head) < 65536:
+                chunk = await asyncio.wait_for(reader.read(4096), 30)
+                if not chunk:
+                    break
+                head += chunk
+            if not head:
+                return
+            first, _, rest = head.partition(b"\r\n")
+            try:
+                method, target, version = first.decode("latin-1").split()
+            except ValueError:
+                writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+                return
+
+            peer = writer.get_extra_info("peername") or ("", 0)
+            key = f"ip:{peer[0]}"
+            cleaned = []
+            for line in rest.split(b"\r\n"):
+                low = line.lower()
+                if low.startswith(b"x-np-session:"):
+                    key = line.split(b":", 1)[1].strip().decode("latin-1") or key
+                    continue
+                cleaned.append(line)
+            rest = b"\r\n".join(cleaned)
+
+            if method.upper() == "CONNECT":
+                host, _, raw_port = target.rpartition(":")
+                try:
+                    port = int(raw_port)
+                except ValueError:
+                    host, port = target, 443
+                proxy = await self._sticky_proxy(key, host)
+                if not proxy:
+                    writer.write(b"HTTP/1.1 503 No Proxy\r\nContent-Length: 0\r\n\r\n")
+                    await writer.drain()
+                    return
+                started = time.monotonic()
+                try:
+                    up_r, up_w = await self._open(proxy, host, port)
+                except Exception:
+                    self._sticky_drop(key)
+                    try:
+                        up_r, up_w, proxy, started = await self._connect(
+                            host, port, True, host=host)
+                    except Exception:
+                        writer.write(b"HTTP/1.1 502 Bad Gateway\r\n"
+                                     b"Content-Length: 0\r\n\r\n")
+                        await writer.drain()
+                        return
+                else:
+                    self._reserve(proxy)
+                try:
+                    writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    await writer.drain()
+                except Exception:
+                    self._release(proxy)
+                    try:
+                        up_w.close()
+                    except Exception:
+                        pass
+                    return
+                self.connections += 1
+                await self._relay(reader, writer, up_r, up_w, proxy, started, host)
+                return
+
+            parts = urlsplit(target)
+            if not parts.hostname:
+                writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+                return
+            host = parts.hostname
+            port = parts.port or 80
+            path = parts.path or "/"
+            if parts.query:
+                path += "?" + parts.query
+            proxy = await self._sticky_proxy(key, host)
+            if not proxy:
+                writer.write(b"HTTP/1.1 503 No Proxy\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+                return
+            started = time.monotonic()
+            try:
+                up_r, up_w = await self._open(proxy, host, port)
+            except Exception:
+                self._sticky_drop(key)
+                try:
+                    up_r, up_w, proxy, started = await self._connect(
+                        host, port, port == 443, host=host)
+                except Exception:
+                    writer.write(b"HTTP/1.1 502 Bad Gateway\r\n"
+                                 b"Content-Length: 0\r\n\r\n")
+                    await writer.drain()
+                    return
+            else:
+                self._reserve(proxy)
+            up_w.write(f"{method} {path} {version}\r\n".encode() + rest)
+            await up_w.drain()
+            self.connections += 1
+            await self._relay(reader, writer, up_r, up_w, proxy, started, host)
+        except Exception:
+            pass
+        finally:
+            try:
+                writer.close()
+            except Exception:
+                pass
+
     async def _handle_http(self, reader, writer) -> None:
         try:
             head = b""
@@ -936,6 +1094,15 @@ class Gateway:
             "max_per_proxy": self.settings["max_per_proxy"],
             "host_block_minutes": self.settings["host_block_minutes"],
             "inflight": sum(self._inflight.values()),
+            "sticky_port": self.settings["sticky_port"],
+            "sticky_sessions": len(self._sticky),
+            "sticky_pins": [
+                {"session": k, "ip": v["proxy"]["ip"],
+                 "port": v["proxy"]["port"],
+                 "protocol": v["proxy"]["protocol"],
+                 "age_s": int(time.time() - v["last"])}
+                for k, v in list(self._sticky.items())[:20]
+            ],
             "last_upstream_status": self._last_status,
             "hedge_delay": self.settings["hedge_delay"],
             "deadline": self.settings["deadline"],
