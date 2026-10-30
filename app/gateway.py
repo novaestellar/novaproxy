@@ -1,8 +1,8 @@
-﻿"""NovaProxy gateway — one local SOCKS5/HTTP endpoint in front of the pool.
+﻿"""novaproxy gateway — one local SOCKS5/HTTP endpoint in front of the pool.
 
 Adapted from novastar's gateway: rotation, failover, per-proxy byte accounting
 and quota enforcement. The difference is where the pool comes from — there are
-no credentials here, only the validated proxy rows NovaProxy already keeps.
+no credentials here, only the validated proxy rows novaproxy already keeps.
 
     app -> 127.0.0.1:11500 (SOCKS5)  \
            127.0.0.1:12500 (HTTP)     -> pool -> rotating exit
@@ -32,9 +32,13 @@ DEFAULT_SETTINGS = {
     "strategy": "round_robin",      # round_robin | least_used | fastest
     "quota_mb": 0,                   # 0 = unlimited, applied to new rows on start
     "timeout": 8.0,
-    "max_fails": 3,
+    "max_fails": 2,
     "retries": 3,                    # upstream attempts per client request
-    "hedge_delay": 1.2,              # start the next attempt this early
+    "hedge_delay": 0.8,              # start the next attempt this early
+    "deadline": 3.0,                 # hard ceiling for opening a tunnel
+    "first_byte_timeout": 2.5,       # give up if upstream stays silent
+    "idle_timeout": 3.8,             # cut a tunnel that stops moving bytes
+    "verified_window": 600,          # seconds a proven row keeps its rank
     "health_interval": 30.0,         # seconds between background re-probes
     "health_batch": 40,              # rows re-probed per pass
     "enabled_protocols": ["http", "socks5", "socks4"],
@@ -86,6 +90,8 @@ class Gateway:
         self._health_task: asyncio.Task | None = None
         self._warm_task: asyncio.Task | None = None
         self._load_lock = asyncio.Lock()
+        self._hot = 0
+        self._hot_at = 0.0
         self._sample = {"in": 0, "out": 0, "req": 0, "at": time.time()}
 
     # ── settings ────────────────────────────────────────────────────
@@ -118,9 +124,10 @@ class Gateway:
             if key not in allowed:
                 continue
             if key in ("socks_port", "http_port", "max_fails", "retries",
-                       "health_batch"):
+                       "health_batch", "verified_window"):
                 value = int(value)
-            elif key in ("timeout", "quota_mb", "health_interval", "hedge_delay"):
+            elif key in ("timeout", "quota_mb", "health_interval", "hedge_delay",
+                         "deadline", "first_byte_timeout", "idle_timeout"):
                 value = float(value)
             elif key == "enabled_protocols":
                 value = [p for p in value if p in ("http", "socks4", "socks5")]
@@ -199,6 +206,22 @@ class Gateway:
             # https:// client. The validator records that capability in `https`
             # for every protocol, so only tunnel-capable rows may serve CONNECT.
             where += " AND https=1"
+            # Once enough rows have proven themselves recently, serve only from
+            # that set: the fresh half of a free pool is where the success rate
+            # actually lives. Below the floor, fall back to the wider pool.
+            cutoff = time.strftime(
+                "%Y-%m-%dT%H:%M:%S",
+                time.localtime(time.time() - float(self.settings["verified_window"])))
+            if time.time() - self._hot_at > 5:
+                async with db().execute(
+                    "SELECT COUNT(*) c FROM proxies WHERE alive=1 AND excluded=0 "
+                    "AND https=1 AND verified_at >= ?", (cutoff,)
+                ) as cur:
+                    self._hot = (await cur.fetchone())["c"]
+                self._hot_at = time.time()
+            if self._hot >= 12 and self.active < 6:
+                where += " AND verified_at >= ?"
+                params.append(cutoff)
         # Freshness beats raw latency on a pool that rots by the minute, but
         # rotation still has to spread: hammering the same verified exits gets
         # the whole pool 429'd by the target that matters.
@@ -275,20 +298,26 @@ class Gateway:
         usage = {asyncio.create_task(attempt(p, i * hedge)): p
                  for i, p in enumerate(picks)}
         errors: list[Exception] = []
+        deadline = float(self.settings["deadline"])
         try:
-            while usage:
-                done, _ = await asyncio.wait(list(usage),
-                                             return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    proxy = usage.pop(task)
-                    exc = task.exception()
-                    if exc is None:
-                        up_r, up_w, proxy, started = task.result()
-                        return up_r, up_w, proxy, started
-                    errors.append(exc)
-                    self.fails += 1
-                    self.last_error = f"{type(exc).__name__}: {exc}"
-                    await self._mark_failed(proxy, str(exc))
+            async with asyncio.timeout(deadline):
+                while usage:
+                    done, _ = await asyncio.wait(list(usage),
+                                                 return_when=asyncio.FIRST_COMPLETED)
+                    for task in done:
+                        proxy = usage.pop(task)
+                        exc = task.exception()
+                        if exc is None:
+                            up_r, up_w, proxy, started = task.result()
+                            return up_r, up_w, proxy, started
+                        errors.append(exc)
+                        self.fails += 1
+                        self.last_error = f"{type(exc).__name__}: {exc}"
+                        await self._mark_failed(proxy, str(exc))
+        except TimeoutError:
+            self.fails += 1
+            self.last_error = f"no tunnel within {deadline:.0f}s"
+            raise
         finally:
             if usage:
                 for task in usage:
@@ -414,9 +443,15 @@ class Gateway:
         self.active += 1
 
         async def pump(src, dst, direction: str):
+            idle = float(self.settings["idle_timeout"])
             try:
                 while True:
-                    chunk = await src.read(65536)
+                    try:
+                        chunk = await asyncio.wait_for(src.read(65536), idle)
+                    except TimeoutError:
+                        # Half a tunnel that stops moving is worse than a closed
+                        # one: the client waits for its own timeout otherwise.
+                        break
                     if not chunk:
                         break
                     dst.write(chunk)
@@ -433,11 +468,18 @@ class Gateway:
                 except Exception:
                     pass
 
+        pumps = [asyncio.create_task(pump(client_r, up_w, "in")),
+                 asyncio.create_task(pump(up_r, client_w, "out"))]
         try:
-            await asyncio.gather(
-                pump(client_r, up_w, "in"),
-                pump(up_r, client_w, "out"),
-            )
+            # A tunnel that completes its handshake and then says nothing is the
+            # slowest failure mode there is: the client waits for its own
+            # timeout. Give the upstream one short window to speak, then cut it.
+            silence = float(self.settings["first_byte_timeout"])
+            _, pending = await asyncio.wait(pumps, timeout=silence)
+            if pending and session.bytes_in == 0:
+                for task in pending:
+                    task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
         finally:
             self.sessions.pop(sid, None)
             self.active -= 1

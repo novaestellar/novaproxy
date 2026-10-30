@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+﻿import type { ReactNode } from "react";
 import { Activity, Gauge, ShieldCheck, Zap } from "lucide-react";
 
 const FEATURES = [
@@ -20,7 +20,7 @@ export function AuthPanel({ children }: { children: ReactNode }) {
             P
           </div>
           <div>
-            <div className="text-[15px] font-semibold tracking-tight">NovaProxy</div>
+            <div className="text-[15px] font-semibold tracking-tight">novaproxy</div>
           </div>
         </div>
 

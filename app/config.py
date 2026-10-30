@@ -1,4 +1,4 @@
-import os
+﻿import os
 
 DB_PATH = os.getenv("NP_DB", "novaproxy.db")
 
@@ -43,3 +43,7 @@ SIGNUP_SOURCES = [
     #     },
     # },
 ]
+# Console auth. "local" trusts loopback (the normal desktop case) and still
+# demands a session for anything arriving from another host; "on" always
+# requires a login even on 127.0.0.1.
+AUTH_MODE = os.getenv("NP_AUTH", "local")

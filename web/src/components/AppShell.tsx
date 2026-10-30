@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -58,7 +58,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
     const match = NAV.find((item) =>
       item.end ? location.pathname === item.to : location.pathname.startsWith(item.to),
     );
-    document.title = `${match?.label ?? "Console"} · NovaProxy`;
+    document.title = `${match?.label ?? "Console"} · novaproxy`;
   }, [location.pathname]);
 
   const logout = async () => {

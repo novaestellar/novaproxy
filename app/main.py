@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import time
 from contextlib import asynccontextmanager
@@ -13,7 +13,8 @@ from fastapi.staticfiles import StaticFiles
 from app.config import (ADMIN_USERNAME, ADMIN_PASSWORD, SIGNUP_SOURCES,
                         VALIDATE_TIMEOUT, VALIDATE_CONCURRENCY, MAX_FAILED_CHECKS,
                         MAX_CANDIDATES, AUTO_DEDUPE, GEO_ENRICH, GEO_MAX,
-                        SITE_CHECK_TIMEOUT, SITE_CHECK_LIMIT, SITE_CHECK_CONCURRENCY)
+                        SITE_CHECK_TIMEOUT, SITE_CHECK_LIMIT, SITE_CHECK_CONCURRENCY,
+                        AUTH_MODE)
 from app.database import init_db, db, execute, executemany
 from app.security import (create_user, get_user, verify_password,
                           create_session, session_user, destroy_session)
@@ -40,7 +41,7 @@ async def lifespan(app: FastAPI):
     await gateway.stop()
 
 
-app = FastAPI(title="NovaProxy", lifespan=lifespan)
+app = FastAPI(title="novaproxy", lifespan=lifespan)
 
 PUBLIC_PREFIXES = ("/login", "/register", "/api/login", "/api/register",
                    "/assets/", "/favicon")
@@ -52,6 +53,14 @@ async def auth_middleware(request: Request, call_next):
     if path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
     user = await session_user(request.cookies.get("np_session"))
+    if not user and AUTH_MODE == "local":
+        # This console binds to loopback and exists to be used, not signed into.
+        # A request that already reached 127.0.0.1 is the operator; anything
+        # arriving from another host still needs a session.
+        client = request.client.host if request.client else ""
+        host = request.url.hostname or ""
+        if client in ("127.0.0.1", "::1") or host in ("127.0.0.1", "localhost"):
+            user = await get_user(ADMIN_USERNAME)
     if not user:
         if path.startswith("/api/"):
             return JSONResponse({"error": "unauthorized"}, status_code=401)

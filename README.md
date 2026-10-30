@@ -15,7 +15,7 @@
 
 ## What this is
 
-NovaProxy is a local control panel for building and maintaining a working proxy
+novaproxy is a local control panel for building and maintaining a working proxy
 pool, and for serving it as one endpoint. You set a target count; it pulls public
 proxy feeds, validates every candidate against live judges, keeps the survivors,
 removes duplicates, enriches them with geo data â€” then a built-in gateway exposes
@@ -25,7 +25,7 @@ per-proxy quotas.
 It replaces the job of hand-editing a `proxies.txt`, guessing which entries still
 work, and never knowing why a request failed.
 
-![NovaProxy overview](docs/novaproxy-demo-poster.png)
+![novaproxy overview](docs/novaproxy-demo-poster.png)
 
 | | |
 |---|---|
@@ -35,11 +35,11 @@ work, and never knowing why a request failed.
 | **Realtime** | Server-sent events, one status frame per second |
 | **Auth** | PBKDF2 (200k iterations), HttpOnly `np_session` cookie |
 
-## NovaProxy vs. novastar
+## novaproxy vs. novastar
 
 They solve different layers. Neither is a replacement for the other.
 
-| | NovaProxy | novastar |
+| | novaproxy | novastar |
 |---|---|---|
 | **Supply** | Public feeds, no accounts | ipstar.io farm / paid account |
 | **IP class** | Datacenter | Residential |
@@ -56,11 +56,11 @@ They solve different layers. Neither is a replacement for the other.
 Rule of thumb:
 
 - **Bulk, non-identity traffic** (scraping, rate-limit spreading, geo checks,
-  load distribution) â†’ NovaProxy. Free, unlimited, disposable.
+  load distribution) â†’ novaproxy. Free, unlimited, disposable.
 - **Identity-sensitive traffic** (signup, anti-bot, per-account isolation) â†’
-  residential. NovaProxy cannot help there, by design.
+  residential. novaproxy cannot help there, by design.
 
-If the residential lane is already covered, NovaProxy is strictly additional
+If the residential lane is already covered, novaproxy is strictly additional
 capacity: it never expires, costs nothing, and can be rebuilt from zero in one
 click.
 
@@ -440,7 +440,7 @@ Exclude the database to ship a clean instance that bootstraps the admin from
 
 ## Legal
 
-NovaProxy aggregates proxies published openly and for free by their maintainers.
+novaproxy aggregates proxies published openly and for free by their maintainers.
 Respect each source's terms of service. Free proxies are operated by strangers â€”
 never send credentials, personal data or anything sensitive through them. Use the
 tool for legitimate testing, scraping and research.
