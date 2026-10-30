@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import json
 import time
 from contextlib import asynccontextmanager

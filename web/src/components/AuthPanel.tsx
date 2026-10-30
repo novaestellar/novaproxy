@@ -1,4 +1,4 @@
-﻿import type { ReactNode } from "react";
+import type { ReactNode } from "react";
 import { Activity, Gauge, ShieldCheck, Zap } from "lucide-react";
 
 const FEATURES = [

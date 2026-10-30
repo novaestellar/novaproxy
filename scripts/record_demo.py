@@ -1,4 +1,4 @@
-﻿"""Record a product demo video of the NovaProxy console.
+"""Record a product demo video of the NovaProxy console.
 
 Requires the server on http://127.0.0.1:12000, Playwright Chromium
 (`playwright install chromium`) and optionally imageio-ffmpeg for the MP4 copy.

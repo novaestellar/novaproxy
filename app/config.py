@@ -1,4 +1,4 @@
-﻿import os
+import os
 
 DB_PATH = os.getenv("NP_DB", "novaproxy.db")
 

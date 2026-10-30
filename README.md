@@ -1,4 +1,4 @@
-﻿<p align="center">
+<p align="center">
   <img src="docs/logo-hero.png" width="340" alt="novaproxy">
 </p>
 
