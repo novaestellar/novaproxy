@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Loader2 } from "lucide-react";
@@ -17,7 +17,7 @@ export function RegisterPage() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    document.title = "Create account · novaproxy";
+    document.title = "novaproxy - create account";
   }, []);
 
   const register = useMutation({

@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Loader2 } from "lucide-react";
@@ -16,7 +16,7 @@ export function LoginPage() {
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    document.title = "Sign in · novaproxy";
+    document.title = "novaproxy - sign in";
   }, []);
 
   const login = useMutation({

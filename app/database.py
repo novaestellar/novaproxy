@@ -59,6 +59,19 @@ CREATE TABLE IF NOT EXISTS site_checks (
     PRIMARY KEY (ip, port, protocol, url)
 );
 CREATE INDEX IF NOT EXISTS idx_site_checks_url ON site_checks(url, checked_at);
+
+CREATE TABLE IF NOT EXISTS target_hits (
+    host TEXT NOT NULL,
+    ip TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    protocol TEXT NOT NULL,
+    ok INTEGER NOT NULL DEFAULT 0,
+    fail INTEGER NOT NULL DEFAULT 0,
+    last_ok TEXT,
+    last_fail TEXT,
+    PRIMARY KEY (host, ip, port, protocol)
+);
+CREATE INDEX IF NOT EXISTS idx_target_hits_host ON target_hits(host, ok);
 """
 
 _PROXY_MIGRATIONS = {

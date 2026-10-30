@@ -50,6 +50,9 @@ PUBLIC_PREFIXES = ("/login", "/register", "/api/login", "/api/register",
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
+    if AUTH_MODE == "local" and path in ("/login", "/register"):
+        # No login screen in the local build: it exists to be used.
+        return RedirectResponse("/", status_code=303)
     if path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
     user = await session_user(request.cookies.get("np_session"))

@@ -1,4 +1,4 @@
-﻿import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,7 +29,7 @@ const NAV = [
 function Brand() {
   return (
     <div className="flex min-w-0 items-center gap-3.5">
-      <div className="nova-mark">N</div>
+      <div className="nova-mark"><img src="/mascot.png" alt="" width="38" height="38" /></div>
       <div className="min-w-0">
         <div className="nova-title">
           nova<span>proxy</span>
@@ -58,7 +58,7 @@ export function AppShell({ me, children }: { me: Me; children: ReactNode }) {
     const match = NAV.find((item) =>
       item.end ? location.pathname === item.to : location.pathname.startsWith(item.to),
     );
-    document.title = `${match?.label ?? "Console"} · novaproxy`;
+    document.title = `novaproxy - ${(match?.label ?? "console").toLowerCase()}`;
   }, [location.pathname]);
 
   const logout = async () => {

@@ -1,4 +1,4 @@
-﻿"""novaproxy gateway — one local SOCKS5/HTTP endpoint in front of the pool.
+"""novaproxy gateway — one local SOCKS5/HTTP endpoint in front of the pool.
 
 Adapted from novastar's gateway: rotation, failover, per-proxy byte accounting
 and quota enforcement. The difference is where the pool comes from — there are
@@ -33,8 +33,8 @@ DEFAULT_SETTINGS = {
     "quota_mb": 0,                   # 0 = unlimited, applied to new rows on start
     "timeout": 8.0,
     "max_fails": 2,
-    "retries": 3,                    # upstream attempts per client request
-    "hedge_delay": 0.8,              # start the next attempt this early
+    "retries": 4,                    # upstream attempts per client request
+    "hedge_delay": 0.6,              # start the next attempt this early
     "deadline": 3.0,                 # hard ceiling for opening a tunnel
     "first_byte_timeout": 2.5,       # give up if upstream stays silent
     "idle_timeout": 3.8,             # cut a tunnel that stops moving bytes
@@ -92,6 +92,8 @@ class Gateway:
         self._load_lock = asyncio.Lock()
         self._hot = 0
         self._hot_at = 0.0
+        self._target_cache: dict[str, tuple[float, set]] = {}
+        self._pick_n = 0
         self._sample = {"in": 0, "out": 0, "req": 0, "at": time.time()}
 
     # ── settings ────────────────────────────────────────────────────
@@ -195,7 +197,8 @@ class Gateway:
 
     # ── pool selection ──────────────────────────────────────────────
     async def _pick(self, require_tunnel: bool = False,
-                    avoid: set[tuple[str, int, str]] | None = None) -> dict | None:
+                    avoid: set[tuple[str, int, str]] | None = None,
+                    host: str | None = None) -> dict | None:
         protocols = self.settings["enabled_protocols"] or ["http"]
         marks = ",".join("?" * len(protocols))
         where = (f"WHERE alive=1 AND excluded=0 AND protocol IN ({marks}) "
@@ -244,6 +247,19 @@ class Gateway:
                         if (r["ip"], int(r["port"]), r["protocol"]) not in avoid]
             if not rows:
                 return None
+            if host:
+                # Per-target memory: a proxy that already carried traffic to
+                # this exact host is worth more than a stranger with the same
+                # latency. Two picks in three come from that set; the third
+                # keeps exploring so the pool does not collapse onto a handful
+                # of exits and get the whole target rate-limiting us.
+                good = await self._target_good(host)
+                if good:
+                    local = [r for r in rows
+                             if (r["ip"], int(r["port"]), r["protocol"]) in good]
+                    self._pick_n += 1
+                    if len(local) >= 4 and self._pick_n % 3:
+                        rows = local
             self._rr = (self._rr + 1) % len(rows)
             return rows[self._rr]
 
@@ -255,6 +271,45 @@ class Gateway:
             "WHERE ip=? AND port=? AND protocol=?",
             (max_fails, proxy["ip"], proxy["port"], proxy["protocol"]),
         )
+
+    async def _target_good(self, host: str) -> set[tuple[str, int, str]]:
+        """Proxies that recently carried traffic to this exact host."""
+        now = time.time()
+        cached = self._target_cache.get(host)
+        if cached and now - cached[0] < 10:
+            return cached[1]
+        cutoff = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now - 1800))
+        good: set[tuple[str, int, str]] = set()
+        async with db().execute(
+            "SELECT ip, port, protocol FROM target_hits "
+            "WHERE host=? AND ok>0 AND (last_ok IS NULL OR last_ok >= ?) "
+            "ORDER BY last_ok DESC LIMIT 240",
+            (host, cutoff),
+        ) as cur:
+            for row in await cur.fetchall():
+                good.add((row["ip"], int(row["port"]), row["protocol"]))
+        self._target_cache[host] = (now, good)
+        return good
+
+    async def _record_target(self, host: str, proxy: dict, ok: bool) -> None:
+        if not host:
+            return
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            await execute(
+                "INSERT INTO target_hits (host, ip, port, protocol, ok, fail, "
+                "last_ok, last_fail) VALUES (?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(host, ip, port, protocol) DO UPDATE SET "
+                "ok = ok + excluded.ok, fail = fail + excluded.fail, "
+                "last_ok = COALESCE(excluded.last_ok, target_hits.last_ok), "
+                "last_fail = COALESCE(excluded.last_fail, target_hits.last_fail)",
+                (host, proxy["ip"], proxy["port"], proxy["protocol"],
+                 1 if ok else 0, 0 if ok else 1,
+                 now if ok else None, None if ok else now),
+            )
+        except Exception:
+            pass
+        self._target_cache.pop(host, None)
 
     async def _mark_ok(self, proxy: dict, latency_ms: int) -> None:
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -280,7 +335,7 @@ class Gateway:
         picks: list[dict] = []
         avoid: set[tuple[str, int, str]] = set()
         for _ in range(tries):
-            proxy = await self._pick(require_tunnel, avoid)
+            proxy = await self._pick(require_tunnel, avoid, host)
             if not proxy:
                 break
             avoid.add((proxy["ip"], int(proxy["port"]), proxy["protocol"]))
@@ -436,7 +491,7 @@ class Gateway:
 
     # ── relay ───────────────────────────────────────────────────────
     async def _relay(self, client_r, client_w, up_r, up_w, proxy: dict,
-                     started: float | None = None) -> None:
+                     started: float | None = None, host: str | None = None) -> None:
         session = Session((proxy["ip"], int(proxy["port"]), proxy["protocol"]))
         sid = id(session)
         self.sessions[sid] = session
@@ -490,8 +545,10 @@ class Gateway:
             latency = int((time.monotonic() - started) * 1000) if started else 0
             if session.bytes_in > 0:
                 await self._mark_ok(proxy, latency)
+                await self._record_target(host, proxy, True)
             elif session.bytes_out > 0:
                 await self._mark_failed(proxy, "tunnel carried no upstream data")
+                await self._record_target(host, proxy, False)
 
     async def _persist_session(self, session: Session) -> None:
         if not (session.bytes_in or session.bytes_out):
@@ -604,7 +661,7 @@ class Gateway:
             writer.write(b"\x05\x00\x00\x01" + b"\x00" * 6)
             await writer.drain()
             self.connections += 1
-            await self._relay(reader, writer, up_r, up_w, proxy, started)
+            await self._relay(reader, writer, up_r, up_w, proxy, started, host)
         except Exception:
             pass
         finally:
@@ -652,7 +709,7 @@ class Gateway:
                 writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await writer.drain()
                 self.connections += 1
-                await self._relay(reader, writer, up_r, up_w, proxy, started)
+                await self._relay(reader, writer, up_r, up_w, proxy, started, host)
                 return
 
             parts = urlsplit(target)
@@ -679,7 +736,7 @@ class Gateway:
             up_w.write(rewritten)
             await up_w.drain()
             self.connections += 1
-            await self._relay(reader, writer, up_r, up_w, proxy, started)
+            await self._relay(reader, writer, up_r, up_w, proxy, started, host)
         except Exception:
             pass
         finally:
@@ -726,6 +783,10 @@ class Gateway:
             "timeout": self.settings["timeout"],
             "max_fails": self.settings["max_fails"],
             "retries": self.settings["retries"],
+            "hedge_delay": self.settings["hedge_delay"],
+            "deadline": self.settings["deadline"],
+            "first_byte_timeout": self.settings["first_byte_timeout"],
+            "idle_timeout": self.settings["idle_timeout"],
             "health_interval": self.settings["health_interval"],
             "health_batch": self.settings["health_batch"],
             "enabled_protocols": self.settings["enabled_protocols"],
