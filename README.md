@@ -16,9 +16,11 @@
 ## What this is
 
 NovaProxy is a local control panel for building and maintaining a working proxy
-pool. You set a target count; it pulls public proxy feeds, validates every
-candidate against live judges, keeps the survivors, removes duplicates, enriches
-them with geo data, and lets you test any URL through the resulting pool.
+pool, and for serving it as one endpoint. You set a target count; it pulls public
+proxy feeds, validates every candidate against live judges, keeps the survivors,
+removes duplicates, enriches them with geo data — then a built-in gateway exposes
+the pool as local SOCKS5 and HTTP, with rotation, failover, byte accounting and
+per-proxy quotas.
 
 It replaces the job of hand-editing a `proxies.txt`, guessing which entries still
 work, and never knowing why a request failed.
@@ -41,11 +43,13 @@ They solve different layers. Neither is a replacement for the other.
 |---|---|---|
 | **Supply** | Public feeds, no accounts | ipstar.io farm / paid account |
 | **IP class** | Datacenter | Residential |
-| **Quota** | None — re-harvest any time | 2 GB per farm account, metered per account |
+| **Quota** | Optional per-proxy cap, byte-accurate | 2 GB per farm account, metered per account |
 | **Validation** | 2 judges, anonymity + HTTPS classified, 3-strike death | Repo-level, no per-proxy health history |
 | **Dedupe** | SQL window function, 5 trigger points | Not applicable |
 | **Geo enrichment** | ip-api batch, 100 per call | Not applicable |
 | **URL test** | Up to 200 alive proxies per check | Not available |
+| **Gateway** | SOCKS5 `:11080` + HTTP `:8120`, rotation + failover | SOCKS5 `:1080` + HTTP `:8118`, rotation + failover |
+| **Analytics** | Traffic samples, quota buckets, protocol split | Pool table with per-account bytes |
 | **UI** | React SPA, live SSE, multi-user | Single admin page |
 | **Failure mode** | Yield drops when public lists rot | Whole pool dies when entitlement is revoked |
 
@@ -212,6 +216,46 @@ to the engine log.
 Alive proxies without a country are sent to the ip-api batch endpoint in groups
 of 100, capped at `GEO_MAX` per run, with a 4-second gap between groups.
 
+## Gateway
+
+The gateway turns the pool into one local endpoint, so applications do not need a
+proxy list — they need one address.
+
+| Listener | Default | Protocol |
+|---|---|---|
+| SOCKS5 | `127.0.0.1:11080` | SOCKS5 CONNECT, no auth on the client side |
+| HTTP | `127.0.0.1:8120` | `CONNECT` tunnels + absolute-URI forwarding |
+
+```bash
+# HTTP
+curl -x http://127.0.0.1:8120 https://api.ipify.org
+
+# SOCKS5
+curl --socks5-hostname 127.0.0.1:11080 https://api.ipify.org
+```
+
+Behaviour, mirroring what novastar's residential gateway got right:
+
+- **Rotation** — `round_robin`, `least_used` or `fastest`, selected in Settings.
+- **Failover** — one failed upstream does not fail the request; the next eligible
+  proxy is tried. Failures accrue; three marks the row dead.
+- **Quota** — every relayed byte is counted per proxy (`bytes_in`, `bytes_out`),
+  with an optional allowance in MB. A proxy at its cap is skipped before the
+  connection opens, not after the upstream rejects it.
+- **Exclusion** — drop a proxy from rotation without deleting it; restore it in
+  one click.
+- **Live counters** — connections, active relays, failures, bytes both ways.
+
+Ports and quota are persisted in the database (table `kv`), so a restart keeps
+them. Changing ports requires stopping and starting the gateway.
+
+## Analytics
+
+The Analytics page reads aggregates over the same database: pool composition,
+relayed bytes per protocol, quota distribution (`fresh` / `half` / `exhausted` /
+`unlimited`), the busiest proxies, site-check pass rate, and a traffic sparkline
+built from 30-second samples written while the gateway is running.
+
 ## Configuration
 
 Environment variables:
@@ -237,6 +281,18 @@ Environment variables:
 | `GEO_ENRICH` | `True` | Enable ip-api enrichment |
 | `GEO_MAX` | `2000` | Proxies enriched per run |
 | `SIGNUP_SOURCES` | `[]` | Optional signup-gated source definitions |
+| `GATEWAY` | see below | Gateway runtime settings, persisted in `kv` |
+
+Gateway defaults (editable from the UI, stored in the database):
+
+| Key | Default | Meaning |
+|---|---|---|
+| `socks_port` | `11080` | SOCKS5 listener |
+| `http_port` | `8120` | HTTP listener |
+| `strategy` | `round_robin` | `round_robin` · `least_used` · `fastest` |
+| `quota_mb` | `0` | Per-proxy allowance; `0` = unlimited |
+| `timeout` | `12` | Upstream connect timeout (seconds) |
+| `max_fails` | `3` | Failures before a proxy is marked dead |
 
 ## Signup-gated sources
 
@@ -294,6 +350,13 @@ All routes except login/register require the `np_session` cookie.
 | `POST` | `/api/proxies/dedupe` | Remove duplicate endpoints |
 | `POST` | `/api/proxies/test` | Test alive proxies against a URL |
 | `GET` | `/api/site-checks` | Stored site-check results |
+| `GET` | `/api/gateway` | Gateway state, counters, warnings |
+| `POST` | `/api/gateway/start` | Start SOCKS5 + HTTP listeners |
+| `POST` | `/api/gateway/stop` | Stop listeners |
+| `POST` | `/api/gateway/settings` | Patch ports, strategy, quota, timeout, max fails |
+| `GET` | `/api/analytics` | Pool, traffic, quota and site-check aggregates |
+| `POST` | `/api/proxies/quota` | `{mb, scope:"all"}` or `{mb, items:[...]}` |
+| `POST` | `/api/proxies/exclude` | `{excluded, scope:"all"}` or `{excluded, items:[...]}` |
 
 Example:
 
@@ -325,6 +388,7 @@ novaproxy/
 ├── app/
 │   ├── main.py          API, auth, SSE, SPA hosting
 │   ├── engine.py        collection loop, dedupe, recheck
+│   ├── gateway.py       SOCKS5 + HTTP gateway, rotation, quota metering
 │   ├── validator.py     concurrent proxy judges
 │   ├── sitecheck.py     URL tests through proxies
 │   ├── sources/

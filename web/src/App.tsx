@@ -17,6 +17,12 @@ const OverviewPage = lazy(() =>
   import("@/pages/OverviewPage").then((m) => ({ default: m.OverviewPage })),
 );
 const PoolPage = lazy(() => import("@/pages/PoolPage").then((m) => ({ default: m.PoolPage })));
+const GatewayPage = lazy(() =>
+  import("@/pages/GatewayPage").then((m) => ({ default: m.GatewayPage })),
+);
+const AnalyticsPage = lazy(() =>
+  import("@/pages/AnalyticsPage").then((m) => ({ default: m.AnalyticsPage })),
+);
 const SiteCheckPage = lazy(() =>
   import("@/pages/SiteCheckPage").then((m) => ({ default: m.SiteCheckPage })),
 );
@@ -74,6 +80,8 @@ export default function App() {
             <Route element={<Protected />}>
               <Route path="/" element={<OverviewPage />} />
               <Route path="/pool" element={<PoolPage />} />
+              <Route path="/gateway" element={<GatewayPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/check" element={<SiteCheckPage />} />
               <Route path="/logs" element={<LogsPage />} />
               <Route path="/settings" element={<SettingsPage />} />

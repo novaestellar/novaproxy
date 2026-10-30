@@ -34,6 +34,18 @@ CREATE TABLE IF NOT EXISTS proxies (
 );
 CREATE INDEX IF NOT EXISTS idx_alive ON proxies(alive, protocol);
 
+CREATE TABLE IF NOT EXISTS kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS traffic_samples (
+    ts TEXT PRIMARY KEY,
+    bytes_in INTEGER NOT NULL DEFAULT 0,
+    bytes_out INTEGER NOT NULL DEFAULT 0,
+    requests INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS site_checks (
     ip TEXT NOT NULL,
     port INTEGER NOT NULL,
@@ -49,8 +61,16 @@ CREATE TABLE IF NOT EXISTS site_checks (
 CREATE INDEX IF NOT EXISTS idx_site_checks_url ON site_checks(url, checked_at);
 """
 
-_conn: aiosqlite.Connection | None = None
-_write_lock = None
+_PROXY_MIGRATIONS = {
+    # column: DDL fragment appended to ALTER TABLE proxies ADD COLUMN
+    "bytes_in": "INTEGER NOT NULL DEFAULT 0",
+    "bytes_out": "INTEGER NOT NULL DEFAULT 0",
+    "requests": "INTEGER NOT NULL DEFAULT 0",
+    "quota_bytes": "INTEGER NOT NULL DEFAULT 0",
+    "excluded": "INTEGER NOT NULL DEFAULT 0",
+    "last_used": "TEXT",
+}
+
 
 
 async def init_db() -> aiosqlite.Connection:
@@ -60,9 +80,20 @@ async def init_db() -> aiosqlite.Connection:
     await _conn.execute("PRAGMA journal_mode=WAL")
     await _conn.execute("PRAGMA busy_timeout=10000")
     await _conn.executescript(_SCHEMA)
+    await _migrate(_conn)
     await _conn.commit()
     _write_lock = __import__("asyncio").Lock()
     return _conn
+
+
+async def _migrate(conn: aiosqlite.Connection) -> None:
+    """Add columns introduced after the first schema revision (idempotent)."""
+    async with conn.execute("PRAGMA table_info(proxies)") as cur:
+        existing = {row["name"] for row in await cur.fetchall()}
+    for column, ddl in _PROXY_MIGRATIONS.items():
+        if column not in existing:
+            await conn.execute(f"ALTER TABLE proxies ADD COLUMN {column} {ddl}")
+
 
 
 def db() -> aiosqlite.Connection:

@@ -36,6 +36,12 @@ export type ProxyRow = {
   checks_failed: number;
   last_checked: string | null;
   added_at: string;
+  bytes_in: number;
+  bytes_out: number;
+  requests: number;
+  quota_bytes: number;
+  excluded: number;
+  last_used: string | null;
 };
 
 export type ProxyResponse = {
@@ -88,6 +94,63 @@ export type SiteCheckResponse = {
 };
 
 export type Me = { username: string; is_admin: boolean };
+
+export type GatewayStatus = {
+  running: boolean;
+  host: string;
+  socks_port: number;
+  http_port: number;
+  strategy: string;
+  quota_mb: number;
+  timeout: number;
+  max_fails: number;
+  enabled_protocols: string[];
+  connections: number;
+  fails: number;
+  active: number;
+  bytes_in: number;
+  bytes_out: number;
+  uptime_s: number;
+  pool: { eligible: number; bytes: number; requests: number; quota_rows: number };
+  warnings: string[];
+  last_error: string;
+};
+
+export type TrafficSample = {
+  ts: string;
+  bytes_in: number;
+  bytes_out: number;
+  requests: number;
+};
+
+export type Analytics = {
+  totals: {
+    total: number;
+    alive: number;
+    dead: number;
+    excluded: number;
+    exhausted: number;
+    requests: number;
+    bytes_in: number;
+    bytes_out: number;
+  };
+  protocols: { protocol: string; c: number; bytes: number; requests: number; avg_ms: number | null }[];
+  top: {
+    ip: string;
+    port: number;
+    protocol: string;
+    requests: number;
+    bytes_in: number;
+    bytes_out: number;
+    quota_bytes: number;
+    latency_ms: number | null;
+    country_code: string | null;
+  }[];
+  quota: { bucket: string; c: number }[];
+  samples: TrafficSample[];
+  site_checks: { recent: number; passed: number };
+  gateway: GatewayStatus;
+};
 
 export type ProxyFilters = {
   protocol?: string;

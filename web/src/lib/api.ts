@@ -1,4 +1,14 @@
-import type { Me, ProxyFilters, ProxyResponse, Settings, SiteCheckResponse, Stats, Status } from "./types";
+import type {
+  Analytics,
+  GatewayStatus,
+  Me,
+  ProxyFilters,
+  ProxyResponse,
+  Settings,
+  SiteCheckResponse,
+  Stats,
+  Status,
+} from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -100,4 +110,34 @@ export const api = {
     if (protocol) params.set("protocol", protocol);
     return `/api/proxies/export?${params.toString()}`;
   },
+
+  gateway: () => request<GatewayStatus>("/api/gateway"),
+
+  gatewayStart: () => request<{ ok: boolean; error?: string; socks?: string; http?: string }>(
+    "/api/gateway/start",
+    { method: "POST" },
+  ),
+
+  gatewayStop: () => request<{ ok: boolean }>("/api/gateway/stop", { method: "POST" }),
+
+  gatewaySettings: (patch: Record<string, unknown>) =>
+    request<GatewayStatus>("/api/gateway/settings", jsonBody(patch)),
+
+  analytics: () => request<Analytics>("/api/analytics"),
+
+  setQuota: (body: { mb: number; scope?: "all"; items?: { ip: string; port: number; protocol: string }[] }) =>
+    request<{ ok: boolean; updated: number | string; quota_bytes: number }>(
+      "/api/proxies/quota",
+      jsonBody(body),
+    ),
+
+  setExcluded: (body: {
+    excluded?: boolean;
+    scope?: "all";
+    items?: { ip: string; port: number; protocol: string }[];
+  }) =>
+    request<{ ok: boolean; updated: number | string; excluded: boolean }>(
+      "/api/proxies/exclude",
+      jsonBody(body),
+    ),
 };

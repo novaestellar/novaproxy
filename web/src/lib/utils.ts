@@ -36,3 +36,16 @@ export function fmtTime(iso: string | null) {
     minute: "2-digit",
   });
 }
+
+export function fmtBytes(bytes: number | null | undefined) {
+  const n = Number(bytes ?? 0);
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = n;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
+}

@@ -5,9 +5,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   ArrowUpRight,
+  BarChart3,
   Globe2,
   LayoutDashboard,
   LogOut,
+  Network,
   Play,
   ScanSearch,
   Settings2,
@@ -26,6 +28,8 @@ import { toast } from "sonner";
 const NAV = [
   { to: "/", label: "Overview", icon: LayoutDashboard, end: true },
   { to: "/pool", label: "Pool", icon: Globe2 },
+  { to: "/gateway", label: "Gateway", icon: Network },
+  { to: "/analytics", label: "Analytics", icon: BarChart3 },
   { to: "/check", label: "Site check", icon: ScanSearch },
   { to: "/logs", label: "Logs", icon: Terminal },
   { to: "/settings", label: "Settings", icon: Settings2 },

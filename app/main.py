@@ -18,6 +18,7 @@ from app.database import init_db, db, execute, executemany
 from app.security import (create_user, get_user, verify_password,
                           create_session, session_user, destroy_session)
 from app.engine import engine
+from app.gateway import gateway
 from app import sitecheck
 
 DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
@@ -26,6 +27,7 @@ DIST = Path(__file__).resolve().parent.parent / "web" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await gateway.load_settings()
     if AUTO_DEDUPE:
         removed = await engine.dedupe()
         if removed:
@@ -35,6 +37,7 @@ async def lifespan(app: FastAPI):
             await create_user(ADMIN_USERNAME, ADMIN_PASSWORD, is_admin=True)
             print(f"!! bootstrapped admin '{ADMIN_USERNAME}' — change the default password")
     yield
+    await gateway.stop()
 
 
 app = FastAPI(title="NovaProxy", lifespan=lifespan)
@@ -209,6 +212,7 @@ async def api_settings():
         "geo_enrich": GEO_ENRICH,
         "geo_max": GEO_MAX,
         "signup_sources": [s.get("name", "unnamed") for s in SIGNUP_SOURCES],
+        "gateway": await gateway.snapshot(),
     }
 
 
@@ -385,7 +389,125 @@ async def api_site_checks(url: str | None = None, limit: int = 100):
     return {"checks": rows}
 
 
-# ── SPA static hosting ─────────────────────────────────────────────────
+# ── gateway api ────────────────────────────────────────────────────────
+@app.get("/api/gateway")
+async def api_gateway():
+    return await gateway.snapshot()
+
+
+@app.post("/api/gateway/start")
+async def api_gateway_start():
+    return await gateway.start()
+
+
+@app.post("/api/gateway/stop")
+async def api_gateway_stop():
+    return await gateway.stop()
+
+
+@app.post("/api/gateway/settings")
+async def api_gateway_settings(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    if not isinstance(body, dict):
+        return JSONResponse({"error": "expected an object"}, status_code=400)
+    return await gateway.apply_settings(body)
+
+
+@app.post("/api/proxies/quota")
+async def api_set_quota(request: Request):
+    """Set the byte allowance for one proxy, a list, or the whole pool."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    mb = max(0.0, float(body.get("mb", 0)))
+    quota = int(mb * 1024 * 1024)
+    if body.get("scope") == "all":
+        await execute("UPDATE proxies SET quota_bytes=?", (quota,))
+        return {"ok": True, "updated": "all", "quota_bytes": quota}
+    items = body.get("items") or []
+    if not items:
+        return JSONResponse({"error": "items or scope=all required"}, status_code=400)
+    await executemany(
+        "UPDATE proxies SET quota_bytes=? WHERE ip=? AND port=? AND protocol=?",
+        [(quota, i["ip"], int(i["port"]), i["protocol"]) for i in items],
+    )
+    return {"ok": True, "updated": len(items), "quota_bytes": quota}
+
+
+@app.post("/api/proxies/exclude")
+async def api_set_excluded(request: Request):
+    """Drop rows from gateway rotation without deleting them."""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+    excluded = 1 if body.get("excluded", True) else 0
+    if body.get("scope") == "all":
+        await execute("UPDATE proxies SET excluded=?", (excluded,))
+        return {"ok": True, "updated": "all", "excluded": bool(excluded)}
+    items = body.get("items") or []
+    if not items:
+        return JSONResponse({"error": "items or scope=all required"}, status_code=400)
+    await executemany(
+        "UPDATE proxies SET excluded=? WHERE ip=? AND port=? AND protocol=?",
+        [(excluded, i["ip"], int(i["port"]), i["protocol"]) for i in items],
+    )
+    return {"ok": True, "updated": len(items), "excluded": bool(excluded)}
+
+
+# ── analytics api ──────────────────────────────────────────────────────
+@app.get("/api/analytics")
+async def api_analytics():
+    async def rows(sql: str, params: tuple = ()):
+        async with db().execute(sql, params) as cur:
+            return [dict(r) for r in await cur.fetchall()]
+
+    totals = (await rows(
+        "SELECT COUNT(*) total, SUM(alive=1) alive, SUM(alive=0) dead, "
+        "SUM(excluded=1) excluded, "
+        "SUM(CASE WHEN quota_bytes>0 AND bytes_in+bytes_out>=quota_bytes "
+        "THEN 1 ELSE 0 END) exhausted, "
+        "COALESCE(SUM(requests),0) requests, "
+        "COALESCE(SUM(bytes_in),0) bytes_in, "
+        "COALESCE(SUM(bytes_out),0) bytes_out "
+        "FROM proxies"))[0]
+    protocols = await rows(
+        "SELECT protocol, COUNT(*) c, "
+        "COALESCE(SUM(bytes_in+bytes_out),0) bytes, "
+        "COALESCE(SUM(requests),0) requests, "
+        "AVG(latency_ms) avg_ms "
+        "FROM proxies WHERE alive=1 GROUP BY protocol ORDER BY c DESC")
+    top = await rows(
+        "SELECT ip, port, protocol, requests, bytes_in, bytes_out, quota_bytes, "
+        "latency_ms, country_code FROM proxies "
+        "WHERE bytes_in+bytes_out > 0 ORDER BY bytes_in+bytes_out DESC LIMIT 10")
+    quota = await rows(
+        "SELECT CASE WHEN quota_bytes=0 THEN 'unlimited' "
+        "WHEN bytes_in+bytes_out >= quota_bytes THEN 'exhausted' "
+        "WHEN (bytes_in+bytes_out)*2 >= quota_bytes THEN 'half' "
+        "ELSE 'fresh' END bucket, COUNT(*) c FROM proxies GROUP BY bucket")
+    samples = await rows(
+        "SELECT ts, bytes_in, bytes_out, requests FROM traffic_samples "
+        "ORDER BY ts DESC LIMIT 60")
+    checks = (await rows(
+        "SELECT COUNT(*) c, SUM(ok=1) passed FROM (SELECT ok FROM site_checks "
+        "ORDER BY checked_at DESC LIMIT 200)"))[0]
+    return {
+        "totals": {k: (v or 0) for k, v in totals.items()},
+        "protocols": protocols,
+        "top": top,
+        "quota": quota,
+        "samples": list(reversed(samples)),
+        "site_checks": {"recent": checks["c"] or 0, "passed": checks["passed"] or 0},
+        "gateway": await gateway.snapshot(),
+    }
+
+
+
 if (DIST / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=DIST / "assets"), name="assets")
 
