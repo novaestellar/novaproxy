@@ -15,6 +15,12 @@ RAW = {
         "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/https.txt",
         "https://raw.githubusercontent.com/proxifly/free-proxy-list/main/proxies/all/data.txt",
         "https://www.proxy-list.download/api/v1/get?type=http",
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/http.txt",
+        "https://raw.githubusercontent.com/proxy4parsing/proxy-list/main/http.txt",
+        "https://raw.githubusercontent.com/sunny9577/proxy-scraper/master/proxies.txt",
+        "https://api.proxyscrape.com/v4/free-proxy-list/get?request=display_proxies&protocol=http&proxy_format=ipport&format=text",
+        "https://raw.githubusercontent.com/iplocate/free-proxy-list/main/protocols/http.txt",
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/http.txt",
     ],
     "socks4": [
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks4.txt",
@@ -23,6 +29,9 @@ RAW = {
         "https://api.openproxylist.xyz/socks4.txt",
         "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks4.txt",
         "https://www.proxy-list.download/api/v1/get?type=socks4",
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks4.txt",
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks4.txt",
+        "https://raw.githubusercontent.com/roosterkid/openproxylist/main/SOCKS4_RAW.txt",
     ],
     "socks5": [
         "https://raw.githubusercontent.com/monosans/proxy-list/main/proxies/socks5.txt",
@@ -33,6 +42,9 @@ RAW = {
         "https://raw.githubusercontent.com/vakhov/fresh-proxy-list/master/socks5.txt",
         "https://raw.githubusercontent.com/officialputuid/KangProxy/KangProxy/socks5.txt",
         "https://www.proxy-list.download/api/v1/get?type=socks5",
+        "https://raw.githubusercontent.com/MuRongPIG/Proxy-Master/main/socks5.txt",
+        "https://raw.githubusercontent.com/hookzof/socks5_list/master/proxy.txt",
+        "https://raw.githubusercontent.com/mmpx12/proxy-list/master/socks5.txt",
     ],
 }
 
