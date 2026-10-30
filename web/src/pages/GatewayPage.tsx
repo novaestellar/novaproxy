@@ -9,6 +9,7 @@ import {
   Network,
   Play,
   Square,
+  Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -132,6 +133,31 @@ export function GatewayPage() {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  const [pinForm, setPinForm] = useState({
+    session: "",
+    ip: "",
+    port: 8080,
+    protocol: "http",
+  });
+
+  const pin = useMutation({
+    mutationFn: () => api.stickyPin(pinForm),
+    onSuccess: () => {
+      toast.success(`Pinned ${pinForm.ip}:${pinForm.port} to "${pinForm.session}"`);
+      refetch();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const clearPins = useMutation({
+    mutationFn: api.stickyClear,
+    onSuccess: () => {
+      toast.success("Sticky pins cleared");
+      refetch();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   const copy = (text: string, label: string) =>
     navigator.clipboard.writeText(text).then(
       () => toast.success(`${label} copied`),
@@ -144,6 +170,7 @@ export function GatewayPage() {
 
   const socksUrl = `socks5://${data.host}:${data.socks_port}`;
   const httpUrl = `http://${data.host}:${data.http_port}`;
+  const stickyUrl = `http://${data.host}:${data.sticky_port}`;
   const top = analytics?.top ?? [];
 
   return (
@@ -245,7 +272,8 @@ export function GatewayPage() {
           <CardContent className="space-y-2">
             {[
               { label: "SOCKS5", value: socksUrl },
-              { label: "HTTP", value: httpUrl },
+              { label: "HTTP (rotasi)", value: httpUrl },
+              { label: "HTTP (sticky)", value: stickyUrl },
             ].map((row) => (
               <div
                 key={row.label}
@@ -389,6 +417,112 @@ export function GatewayPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="mt-3">
+        <CardHeader>
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <Lock className="size-4 text-accent" />
+              Sticky sessions
+            </CardTitle>
+            <CardDescription>
+              One exit per session on port {data.sticky_port}. Key is the{" "}
+              <code className="font-mono text-muted">X-NP-Session</code> header, or the
+              client IP when absent — so a local caller keeps one exit across a
+              multi-step flow.
+            </CardDescription>
+          </div>
+          <Badge variant={data.sticky_sessions ? "success" : "default"}>
+            {data.sticky_sessions} pinned
+          </Badge>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="w-40">
+              <Label>Session</Label>
+              <Input
+                value={pinForm.session}
+                onChange={(event) => setPinForm({ ...pinForm, session: event.target.value })}
+                placeholder="reg"
+              />
+            </div>
+            <div className="w-40">
+              <Label>Exit IP</Label>
+              <Input
+                value={pinForm.ip}
+                onChange={(event) => setPinForm({ ...pinForm, ip: event.target.value })}
+                placeholder="1.2.3.4"
+              />
+            </div>
+            <div className="w-24">
+              <Label>Port</Label>
+              <Input
+                type="number"
+                value={pinForm.port}
+                onChange={(event) => setPinForm({ ...pinForm, port: Number(event.target.value) })}
+              />
+            </div>
+            <div className="w-28">
+              <Label>Proto</Label>
+              <NativeSelect
+                value={pinForm.protocol}
+                onChange={(event) => setPinForm({ ...pinForm, protocol: event.target.value })}
+              >
+                <option value="http">http</option>
+                <option value="socks5">socks5</option>
+                <option value="socks4">socks4</option>
+              </NativeSelect>
+            </div>
+            <Button
+              size="sm"
+              onClick={() => pin.mutate()}
+              disabled={!pinForm.session || !pinForm.ip || pin.isPending}
+            >
+              Pin exit
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => clearPins.mutate()}
+              disabled={!data.sticky_sessions || clearPins.isPending}
+            >
+              Clear all
+            </Button>
+          </div>
+
+          {data.sticky_pins.length === 0 ? (
+            <div className="rounded-md border border-border bg-background/50 p-3 text-[12px] text-muted">
+              No session pinned yet. Leave it empty and the listener picks an exit on the
+              first request, then keeps it until {Math.round(300 / 60)} minutes of silence.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-md border border-border">
+              <table className="w-full text-left text-[12px]">
+                <thead className="border-b border-border text-[10px] uppercase tracking-wide text-faint">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Session</th>
+                    <th className="px-3 py-2 font-medium">Exit</th>
+                    <th className="px-3 py-2 font-medium">Proto</th>
+                    <th className="px-3 py-2 font-medium">Idle</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.sticky_pins.map((row) => (
+                    <tr key={row.session} className="border-b border-border/60 last:border-0">
+                      <td className="px-3 py-2 font-mono text-fg">{row.session}</td>
+                      <td className="px-3 py-2 font-mono text-muted">
+                        {row.ip}:{row.port}
+                      </td>
+                      <td className="px-3 py-2 text-muted">{row.protocol}</td>
+                      <td className="px-3 py-2 font-mono text-muted">{row.age_s}s</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="mt-3">
         <CardHeader>

@@ -105,6 +105,19 @@ export type GatewayStatus = {
   timeout: number;
   max_fails: number;
   retries: number;
+  max_per_proxy: number;
+  host_block_minutes: number;
+  inflight: number;
+  last_upstream_status: number;
+  sticky_port: number;
+  sticky_sessions: number;
+  sticky_pins: {
+    session: string;
+    ip: string;
+    port: number;
+    protocol: string;
+    age_s: number;
+  }[];
   health_interval: number;
   health_batch: number;
   enabled_protocols: string[];

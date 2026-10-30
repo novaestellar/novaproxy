@@ -137,6 +137,12 @@ export const api = {
   gatewaySettings: (patch: Record<string, unknown>) =>
     request<GatewayStatus>("/api/gateway/settings", jsonBody(patch)),
 
+  stickyPin: (body: { session: string; ip: string; port: number; protocol: string }) =>
+    request<{ ok: boolean; session: string }>("/api/gateway/sticky/pin", jsonBody(body)),
+
+  stickyClear: () =>
+    request<{ ok: boolean; sessions: number }>("/api/gateway/sticky/clear", { method: "POST" }),
+
   analytics: () => request<Analytics>("/api/analytics"),
 
   sources: () => request<{ items: ProxySource[] }>("/api/sources"),
