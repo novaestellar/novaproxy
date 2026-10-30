@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo-hero.png" width="340" alt="novaproxy">
+  <img src="docs/logo-circle.png" width="150" alt="novaproxy">
 </p>
 
 <h1 align="center">novaproxy</h1>
@@ -35,7 +35,7 @@ novaproxy 补的就是这个空档：
 
 | 问题 | 处理方式 |
 |---|---|
-| 来源散落在十几个仓库和 API | 12 个公开源并行抓取，一次拿全 |
+| 来源散落在十几个仓库和 API | 25 个公开源并行抓取，一次拿全 |
 | 列表里大量已经死掉的地址 | 并发校验，三振出局，死的自动降级 |
 | 能连 HTTP 但过不了 HTTPS | 单独探测 TLS 隧道，`https` 标记真实能力 |
 | 每次换 IP 要改代码 | 一个固定本地入口，后台轮换 |
@@ -48,7 +48,7 @@ novaproxy 补的就是这个空档：
 
 | 模块 | 能力 |
 |---|---|
-| **采集** | 12 个公开源（HTTP / SOCKS4 / SOCKS5）+ GeoNode 分页接口，并行下载与解析 |
+| **采集** | 25 个公开源（HTTP / SOCKS4 / SOCKS5）+ GeoNode 分页接口，并行下载与解析；可增删 |
 | **校验** | 两个判据（httpbin、ip-api）判定存活、匿名度（elite / anonymous / transparent）、响应延迟 |
 | **TLS 隧道探测** | 对每种协议都实测穿过隧道的 HTTPS，写入 `https`；网关只挑真正能过 TLS 的行 |
 | **去重** | SQL 窗口函数按 `ip:port` 保留最健康的一条，重复行自动清除 |
@@ -69,7 +69,7 @@ novaproxy 补的就是这个空档：
 
 ## 界面
 
-- 顶部是小狗标志（圆形 + 描边环），左侧七个子页签：overview / pool / gateway / analytics / site check / logs / settings
+- 顶部是小狗标志（圆形 + 描边环），其下七个页签：overview / pool / gateway / analytics / site check / logs / settings
 - 主题切换在首次绘制前解析，页面不闪白
 - 字体自托管（Nunito + Quicksand），离线也能正确渲染
 - 所有列表支持排序、过滤、分页，导出支持 txt / json
@@ -113,6 +113,7 @@ docker build -t novaproxy .
 docker run -d --name novaproxy \
   -p 12000:12000 -p 11500:11500 -p 12500:12500 \
   -e NP_AUTH=local \
+  -e NP_GATEWAY_HOST=0.0.0.0 \
   -e NP_DB=/app/data/novaproxy.db \
   -v "$(pwd)/data:/app/data" \
   novaproxy
@@ -244,6 +245,7 @@ proxies = {"http": "http://127.0.0.1:12500", "https": "http://127.0.0.1:12500"}
 | `NP_PORT` | `12000` | 控制台端口 |
 | `NP_LOG` | `info` | uvicorn 日志级别 |
 | `NP_AUTH` | `local` | `local` 本机免登录；`on` 强制登录 |
+| `NP_GATEWAY_HOST` | `127.0.0.1` | 网关监听地址；容器内需设为 `0.0.0.0` |
 | `NP_ADMIN_USER` | `admin` | 首次启动创建的账号 |
 | `NP_ADMIN_PASS` | `admin123` | 首次启动创建的密码 |
 
@@ -263,6 +265,8 @@ proxies = {"http": "http://127.0.0.1:12500", "https": "http://127.0.0.1:12500"}
 |---|---|---|
 | POST | `/api/collect` | 开始采集 |
 | POST | `/api/stop` | 停止采集 |
+| POST | `/api/login` · `/api/logout` · `/api/register` | 会话（`NP_AUTH=local` 时本机不需要） |
+| GET | `/api/me` | 当前身份 |
 | GET | `/api/status` | 采集进度 |
 | GET | `/api/stream` | SSE 实时日志 |
 | GET | `/api/stats` | 概览统计 |
@@ -275,14 +279,21 @@ proxies = {"http": "http://127.0.0.1:12500", "https": "http://127.0.0.1:12500"}
 | POST | `/api/proxies/dedupe` | 去重 |
 | POST | `/api/proxies/purge-dead` | 清理死行 |
 | GET | `/api/gateway` | 网关状态 |
-| POST | `/api/gateway/start` \| `stop` | 启动 / 停止 |
+| POST | `/api/gateway/start` | 启动网关 |
+| POST | `/api/gateway/stop` | 停止网关 |
 | POST | `/api/gateway/scan` | 全池重新校验（含 TLS） |
 | POST | `/api/gateway/drop-dead` | 剔除死行 |
 | POST | `/api/gateway/restore` | 恢复全部 |
 | POST | `/api/gateway/settings` | 更新网关参数 |
 | GET | `/api/analytics` | 流量样本、协议分布、配额状态 |
+| GET | `/api/settings` | 只读配置视图 |
 | GET | `/api/site-checks` | 站点检测历史 |
-| POST | `/api/proxies/test` | 指定 URL 的连通性测试 |
+| GET | `/api/sources` | 源清单（含启用状态与上次抓取条数） |
+| POST | `/api/sources` | 新增源（添加时立即探测并返回条数） |
+| POST | `/api/sources/toggle` | 启用 / 停用某个源 |
+| POST | `/api/sources/remove` | 删除自建源 |
+| GET | `/api/autopool` | 自动补池配置与当前池量 |
+| POST | `/api/autopool` | 修改阈值与间隔 |
 
 ---
 

@@ -29,5 +29,9 @@
 *.db   binary
 
 # Generated bundles: do not diff, do not merge by line.
-web/dist/*.js  -diff merge=ours
-web/dist/*.css -diff merge=ours
+# `*` does not cross `/` in gitattributes, so both levels are named.
+web/dist/*.js          -diff merge=ours
+web/dist/*.css         -diff merge=ours
+web/dist/**/*.js       -diff merge=ours
+web/dist/**/*.css      -diff merge=ours
+web/dist/index.html    -diff merge=ours

@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import json
+import os
 import socket
 import struct
 import time
@@ -26,7 +27,9 @@ from urllib.parse import urlsplit
 from app.database import db, execute
 
 DEFAULT_SETTINGS = {
-    "host": "127.0.0.1",
+    # Loopback by default. A container needs NP_GATEWAY_HOST=0.0.0.0 so the
+    # published ports actually reach the listener.
+    "host": os.getenv("NP_GATEWAY_HOST", "127.0.0.1"),
     "socks_port": 11500,
     "http_port": 12500,
     "strategy": "round_robin",      # round_robin | least_used | fastest
