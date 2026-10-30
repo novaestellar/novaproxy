@@ -120,6 +120,18 @@ export const api = {
 
   gatewayStop: () => request<{ ok: boolean }>("/api/gateway/stop", { method: "POST" }),
 
+  gatewayDropDead: () =>
+    request<{ ok: boolean; dropped: number }>("/api/gateway/drop-dead", { method: "POST" }),
+
+  gatewayRestore: () =>
+    request<{ ok: boolean; restored: number }>("/api/gateway/restore", { method: "POST" }),
+
+  gatewayScan: () =>
+    request<{ ok: boolean; checked: number; alive: number; passed: number; failed: number }>(
+      "/api/gateway/scan",
+      { method: "POST" },
+    ),
+
   gatewaySettings: (patch: Record<string, unknown>) =>
     request<GatewayStatus>("/api/gateway/settings", jsonBody(patch)),
 

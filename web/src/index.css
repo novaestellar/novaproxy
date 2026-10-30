@@ -1,31 +1,113 @@
 @import "tailwindcss";
 
+/* NovaProxy console — the novastar world, ported rather than imitated.
+   Warm paper + lilac in light, deep plum in dark. One token set, two themes. */
+
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 300 800;
+  font-display: swap;
+  src: url("/fonts/Nunito-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Quicksand";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/Quicksand-latin.woff2") format("woff2");
+}
+
+:root,
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --c-background: #fdfaf5;
+  --c-surface: #ffffff;
+  --c-panel: #ffffff;
+  --c-elevated: #f7f0e6;
+  --c-border: #f0e7dc;
+  --c-border-strong: #e4d8c9;
+  --c-fg: #2e2733;
+  --c-muted: #574f5f;
+  --c-faint: #77707f;
+
+  --c-accent: #8f6fd8;
+  --c-accent-soft: #ede7fb;
+  --c-success: #3e8e6c;
+  --c-warning: #8a6414;
+  --c-danger: #be4436;
+  --c-info: #56699f;
+
+  --c-header: #4a3a78;
+  --c-header-ink: #ffffff;
+  --c-header-muted: rgba(255, 255, 255, 0.72);
+
+  --aurora-1: rgba(167, 139, 224, 0.3);
+  --aurora-2: rgba(111, 220, 166, 0.2);
+  --aurora-3: rgba(255, 211, 122, 0.22);
+  --glow-1: #f3ecff;
+  --glow-2: #fff3e0;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --c-background: #17131f;
+  --c-surface: #1e1929;
+  --c-panel: #241e31;
+  --c-elevated: #2c2539;
+  --c-border: #362e45;
+  --c-border-strong: #4a3d60;
+  --c-fg: #f3eefa;
+  --c-muted: #b7aec7;
+  --c-faint: #857b99;
+
+  --c-accent: #a78be0;
+  --c-accent-soft: #3a2f55;
+  --c-success: #6fdca6;
+  --c-warning: #ffd37a;
+  --c-danger: #ff8a7a;
+  --c-info: #9fb4f2;
+
+  --c-header: #211b2e;
+  --c-header-ink: #f3eefa;
+  --c-header-muted: rgba(243, 238, 250, 0.62);
+
+  --aurora-1: rgba(167, 139, 224, 0.18);
+  --aurora-2: rgba(111, 220, 166, 0.1);
+  --aurora-3: rgba(255, 211, 122, 0.09);
+  --glow-1: #2a2140;
+  --glow-2: #2a2118;
+}
+
 @theme {
-  --font-sans: ui-sans-serif, -apple-system, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  --font-sans: "Nunito", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
 
-  --color-background: #07080a;
-  --color-surface: #0c0e12;
-  --color-panel: #11141a;
-  --color-elevated: #171b23;
-  --color-border: #1f242e;
-  --color-border-strong: #2c333f;
-  --color-fg: #e8eaf0;
-  --color-muted: #8b93a3;
-  --color-faint: #5d6575;
+  --color-background: var(--c-background);
+  --color-surface: var(--c-surface);
+  --color-panel: var(--c-panel);
+  --color-elevated: var(--c-elevated);
+  --color-border: var(--c-border);
+  --color-border-strong: var(--c-border-strong);
+  --color-fg: var(--c-fg);
+  --color-muted: var(--c-muted);
+  --color-faint: var(--c-faint);
 
-  --color-accent: #7c6cff;
-  --color-accent-soft: #2a2450;
-  --color-success: #3ddc97;
-  --color-warning: #f5b759;
-  --color-danger: #ff6b6b;
-  --color-info: #5cc8ff;
+  --color-accent: var(--c-accent);
+  --color-accent-soft: var(--c-accent-soft);
+  --color-success: var(--c-success);
+  --color-warning: var(--c-warning);
+  --color-danger: var(--c-danger);
+  --color-info: var(--c-info);
 
-  --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius-md: 10px;
-  --radius-lg: 14px;
-  --radius-xl: 18px;
+  --radius-xs: 8px;
+  --radius-sm: 11px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
 }
 
 @layer base {
@@ -38,30 +120,37 @@
     height: 100%;
   }
   body {
-    background: var(--color-background);
     color: var(--color-fg);
     font-family: var(--font-sans);
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    font-variant-numeric: tabular-nums;
+    background:
+      radial-gradient(1100px 560px at 88% -14%, var(--glow-1), transparent 62%),
+      radial-gradient(820px 460px at -8% 6%, var(--glow-2), transparent 58%),
+      var(--color-background);
+    background-attachment: fixed;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
   ::selection {
-    background: color-mix(in oklab, var(--color-accent) 35%, transparent);
+    background: var(--color-accent-soft);
+    color: var(--color-fg);
   }
   ::-webkit-scrollbar {
-    width: 10px;
-    height: 10px;
+    width: 11px;
+    height: 11px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
   ::-webkit-scrollbar-thumb {
-    background: #262c37;
+    background: var(--color-border-strong);
     border-radius: 999px;
-    border: 2px solid var(--color-background);
+    border: 2px solid transparent;
+    background-clip: content-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #343b48;
+    background: var(--color-accent);
+    background-clip: content-box;
   }
   input,
   select,
@@ -69,22 +158,192 @@
   button {
     font: inherit;
   }
+  h1,
+  h2,
+  h3 {
+    font-family: "Quicksand", "Nunito", sans-serif;
+    letter-spacing: -0.01em;
+  }
 }
 
-@utility grid-noise {
-  background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
-  background-size: 44px 44px;
+/* ---------------------------------------------------------------- aurora */
+/* Three colour fields behind everything. Pure decoration: remove the node and
+   the console renders identically. */
+.aurora {
+  position: fixed;
+  inset: -14vmax;
+  z-index: -1;
+  pointer-events: none;
+}
+.aurora i {
+  position: absolute;
+  display: block;
+  border-radius: 50%;
+  will-change: transform;
+}
+.aurora i:nth-child(1) {
+  width: 62vmax;
+  height: 62vmax;
+  left: -10vmax;
+  top: -14vmax;
+  background: radial-gradient(circle, var(--aurora-1), transparent 66%);
+  animation: drift 34s ease-in-out infinite alternate;
+}
+.aurora i:nth-child(2) {
+  width: 52vmax;
+  height: 52vmax;
+  right: -12vmax;
+  top: 4vmax;
+  background: radial-gradient(circle, var(--aurora-2), transparent 68%);
+  animation: drift 42s ease-in-out infinite alternate-reverse;
+}
+.aurora i:nth-child(3) {
+  width: 46vmax;
+  height: 46vmax;
+  left: 24vmax;
+  bottom: -18vmax;
+  background: radial-gradient(circle, var(--aurora-3), transparent 70%);
+  animation: drift 48s ease-in-out infinite alternate;
+}
+@keyframes drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(3vmax, 2vmax, 0) scale(1.08);
+  }
 }
 
-@utility glass {
-  background: color-mix(in oklab, var(--color-panel) 82%, transparent);
-  backdrop-filter: blur(12px);
+/* ---------------------------------------------------------------- header */
+.nova-header {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 22px 18px;
+  background: var(--c-header);
+  color: var(--c-header-ink);
+  box-shadow: 0 10px 30px -14px rgba(74, 58, 120, 0.45);
+  overflow: hidden;
+}
+.nova-header::after {
+  content: "";
+  position: absolute;
+  inset: -60% -10% auto 40%;
+  height: 240%;
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.14), transparent);
+  pointer-events: none;
+}
+.nova-header::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.45), transparent);
+  z-index: 1;
 }
 
-@utility text-balance {
-  text-wrap: balance;
+.nova-mark {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 15px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+  font-family: "Quicksand", sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 6px 16px -6px rgba(0, 0, 0, 0.35);
+}
+
+.nova-title {
+  font-family: "Quicksand", "Nunito", sans-serif;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+.nova-title span {
+  opacity: 0.72;
+  font-weight: 400;
+}
+.nova-sub {
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--c-header-muted);
+}
+
+.nova-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: var(--c-header-ink);
+  white-space: nowrap;
+}
+
+.nova-theme {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--c-header-ink);
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+.nova-theme:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ------------------------------------------------------------------- nav */
+.nova-nav {
+  position: sticky;
+  top: 78px;
+  z-index: 20;
+  display: flex;
+  gap: 4px;
+  padding: 8px 22px;
+  overflow-x: auto;
+  background: color-mix(in oklab, var(--color-background) 88%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--color-border);
+}
+.nova-nav a {
+  padding: 6px 13px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-muted);
+  white-space: nowrap;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+.nova-nav a:hover {
+  background: var(--color-elevated);
+  color: var(--color-fg);
+}
+.nova-nav a[aria-current="page"] {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+/* ------------------------------------------------------------------ card */
+.nova-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-panel);
+  box-shadow: 0 1px 2px rgba(60, 48, 90, 0.05), 0 8px 24px -16px rgba(60, 48, 90, 0.28);
 }
 
 @keyframes pulse-ring {
@@ -98,7 +357,6 @@
     box-shadow: 0 0 0 0 transparent;
   }
 }
-
 .live-dot {
   animation: pulse-ring 2s infinite;
 }

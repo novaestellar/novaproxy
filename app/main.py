@@ -405,6 +405,78 @@ async def api_gateway_stop():
     return await gateway.stop()
 
 
+@app.post("/api/gateway/drop-dead")
+async def api_gateway_drop_dead():
+    """Persistently exclude every proxy currently marked dead."""
+    async with db().execute("SELECT COUNT(*) c FROM proxies WHERE alive=0 AND excluded=0") as cur:
+        count = (await cur.fetchone())["c"]
+    await execute("UPDATE proxies SET excluded=1 WHERE alive=0")
+    return {"ok": True, "dropped": count}
+
+
+@app.post("/api/gateway/restore")
+async def api_gateway_restore():
+    """Return every excluded proxy to rotation."""
+    async with db().execute("SELECT COUNT(*) c FROM proxies WHERE excluded=1") as cur:
+        count = (await cur.fetchone())["c"]
+    await execute("UPDATE proxies SET excluded=0")
+    return {"ok": True, "restored": count}
+
+
+@app.post("/api/gateway/scan")
+async def api_gateway_scan():
+    """Re-validate the eligible pool before trusting the alive flag.
+
+    novastar probes every credential before serving; the same discipline is
+    needed here because public lists rot between harvests.
+    """
+    from app.validator import check_batch
+
+    async with db().execute(
+        "SELECT ip, port, protocol FROM proxies WHERE alive=1 AND excluded=0"
+    ) as cur:
+        rows = [dict(r) for r in await cur.fetchall()]
+    if not rows:
+        return {"ok": True, "checked": 0, "alive": 0}
+
+    items = [(r["ip"], r["port"], r["protocol"]) for r in rows]
+    passed: list[tuple] = []
+    failed: list[tuple] = []
+    done = [0]
+
+    async def on_result(res, item):
+        if res:
+            passed.append((res["anonymity"], res["latency_ms"], res["https"],
+                           time.strftime("%Y-%m-%dT%H:%M:%S"), *item))
+        else:
+            failed.append(item)
+
+    def progress():
+        done[0] += 1
+
+    await check_batch(items, min(200, max(20, len(items))), on_result, progress,
+                      timeout=8.0)
+    if passed:
+        await executemany(
+            "UPDATE proxies SET anonymity=?, latency_ms=?, https=?, last_checked=?, "
+            "checks_failed=0 WHERE ip=? AND port=? AND protocol=?",
+            passed,
+        )
+    if failed:
+        await executemany(
+            "UPDATE proxies SET checks_failed = checks_failed + 1, "
+            "alive = CASE WHEN checks_failed + 1 >= ? THEN 0 ELSE alive END, "
+            "last_checked=? WHERE ip=? AND port=? AND protocol=?",
+            [(MAX_FAILED_CHECKS, time.strftime("%Y-%m-%dT%H:%M:%S"),
+              i[0], i[1], i[2]) for i in failed],
+        )
+    alive = (await (await db().execute(
+        "SELECT COUNT(*) c FROM proxies WHERE alive=1 AND excluded=0")).fetchone())["c"]
+    engine.log("info", f"gateway scan: {len(passed)}/{len(items)} alive, {len(failed)} failed")
+    return {"ok": True, "checked": len(items), "alive": alive,
+            "passed": len(passed), "failed": len(failed)}
+
+
 @app.post("/api/gateway/settings")
 async def api_gateway_settings(request: Request):
     try:

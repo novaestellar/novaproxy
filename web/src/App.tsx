@@ -5,6 +5,7 @@ import { Toaster } from "sonner";
 import { Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { LiveProvider } from "@/lib/live";
+import { ThemeProvider } from "@/lib/theme";
 import { AppShell } from "@/components/AppShell";
 
 const LoginPage = lazy(() =>
@@ -71,36 +72,38 @@ function Protected() {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <BrowserRouter>
-        <Suspense fallback={<Booting />}>
-          <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
-            <Route element={<Protected />}>
-              <Route path="/" element={<OverviewPage />} />
-              <Route path="/pool" element={<PoolPage />} />
-              <Route path="/gateway" element={<GatewayPage />} />
-              <Route path="/analytics" element={<AnalyticsPage />} />
-              <Route path="/check" element={<SiteCheckPage />} />
-              <Route path="/logs" element={<LogsPage />} />
-              <Route path="/settings" element={<SettingsPage />} />
-            </Route>
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
-      <Toaster
-        theme="dark"
-        position="bottom-right"
-        toastOptions={{
-          style: {
-            background: "#11141a",
-            border: "1px solid #1f242e",
-            color: "#e8eaf0",
-          },
-        }}
-      />
-    </QueryClientProvider>
+    <ThemeProvider>
+      <QueryClientProvider client={queryClient}>
+        <BrowserRouter>
+          <Suspense fallback={<Booting />}>
+            <Routes>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegisterPage />} />
+              <Route element={<Protected />}>
+                <Route path="/" element={<OverviewPage />} />
+                <Route path="/pool" element={<PoolPage />} />
+                <Route path="/gateway" element={<GatewayPage />} />
+                <Route path="/analytics" element={<AnalyticsPage />} />
+                <Route path="/check" element={<SiteCheckPage />} />
+                <Route path="/logs" element={<LogsPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
+              </Route>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+        <Toaster
+          theme="system"
+          position="bottom-right"
+          toastOptions={{
+            style: {
+              background: "var(--color-panel)",
+              border: "1px solid var(--color-border)",
+              color: "var(--color-fg)",
+            },
+          }}
+        />
+      </QueryClientProvider>
+    </ThemeProvider>
   );
 }

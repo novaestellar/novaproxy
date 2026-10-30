@@ -1,13 +1,26 @@
 <!doctype html>
-<html lang="en" class="dark">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>NovaProxy — proxy harvesting console</title>
-    <meta name="color-scheme" content="dark" />
+    <meta name="color-scheme" content="light dark" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <script type="module" crossorigin src="/assets/index-DF3YUM4M.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-Dfy_btR8.css">
+    <link rel="preload" href="/fonts/Nunito-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/Quicksand-latin.woff2" as="font" type="font/woff2" crossorigin />
+    <script>
+      /* Resolve the theme before first paint so the page never flashes. */
+      (function () {
+        var t;
+        try { t = localStorage.getItem("theme"); } catch (e) {}
+        if (t !== "dark" && t !== "light") {
+          t = window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.setAttribute("data-theme", t);
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-DGLkeSct.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CxzFbBGn.css">
   </head>
   <body>
     <div id="root"></div>

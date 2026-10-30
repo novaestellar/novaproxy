@@ -57,13 +57,15 @@ async def check(ip: str, port: int, protocol: str,
                 else:
                     result["anonymity"] = "anonymous"
 
-            if protocol == "http":
-                try:
-                    async with s.get("https://httpbin.org/get", proxy=proxy,
-                                     timeout=aiohttp.ClientTimeout(total=6)) as r:
-                        result["https"] = int(r.status == 200)
-                except Exception:
-                    pass
+            # TLS through the tunnel is a separate capability from plain HTTP:
+            # many public proxies answer http:// and then drop CONNECT. Probe it
+            # for every protocol so the gateway can filter on it.
+            try:
+                async with s.get("https://httpbin.org/get", proxy=proxy,
+                                 timeout=aiohttp.ClientTimeout(total=6)) as r:
+                    result["https"] = int(r.status == 200)
+            except Exception:
+                pass
         return result
     except Exception:
         return None

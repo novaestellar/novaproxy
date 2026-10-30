@@ -91,6 +91,31 @@ export function GatewayPage() {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  const dropDead = useMutation({
+    mutationFn: api.gatewayDropDead,
+    onSuccess: (res) => {
+      toast.success(`Dropped ${res.dropped} dead proxies from rotation`);
+      refetch();
+    },
+  });
+
+  const restore = useMutation({
+    mutationFn: api.gatewayRestore,
+    onSuccess: (res) => {
+      toast.success(`Restored ${res.restored} proxies`);
+      refetch();
+    },
+  });
+
+  const scan = useMutation({
+    mutationFn: api.gatewayScan,
+    onSuccess: (res) => {
+      toast.success(`Scanned ${res.checked} · ${res.passed} alive · ${res.alive} eligible`);
+      refetch();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
   const copy = (text: string, label: string) =>
     navigator.clipboard.writeText(text).then(
       () => toast.success(`${label} copied`),
@@ -111,17 +136,43 @@ export function GatewayPage() {
         title="Gateway"
         subtitle="One local endpoint in front of the pool — rotation, failover, byte accounting and quota."
         actions={
-          data.running ? (
-            <Button variant="danger" onClick={() => stop.mutate()} disabled={stop.isPending}>
-              <Square className="size-3.5" />
-              Stop gateway
+          <>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => scan.mutate()}
+              disabled={scan.isPending}
+            >
+              {scan.isPending ? "Scanning…" : "Scan pool"}
             </Button>
-          ) : (
-            <Button onClick={() => start.mutate()} disabled={start.isPending}>
-              <Play className="size-3.5" />
-              Start gateway
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => dropDead.mutate()}
+              disabled={dropDead.isPending}
+            >
+              Drop dead
             </Button>
-          )
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => restore.mutate()}
+              disabled={restore.isPending}
+            >
+              Restore
+            </Button>
+            {data.running ? (
+              <Button variant="danger" size="sm" onClick={() => stop.mutate()} disabled={stop.isPending}>
+                <Square className="size-3.5" />
+                Stop gateway
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => start.mutate()} disabled={start.isPending}>
+                <Play className="size-3.5" />
+                Start gateway
+              </Button>
+            )}
+          </>
         }
       />
 

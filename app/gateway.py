@@ -150,11 +150,17 @@ class Gateway:
         return {"ok": True}
 
     # ── pool selection ──────────────────────────────────────────────
-    async def _pick(self) -> dict | None:
+    async def _pick(self, require_tunnel: bool = False) -> dict | None:
         protocols = self.settings["enabled_protocols"] or ["http"]
         marks = ",".join("?" * len(protocols))
         where = (f"WHERE alive=1 AND excluded=0 AND protocol IN ({marks}) "
                  "AND (quota_bytes=0 OR bytes_in + bytes_out < quota_bytes)")
+        params: list = list(protocols)
+        if require_tunnel:
+            # A proxy that answers http:// but drops CONNECT/TLS cannot serve an
+            # https:// client. The validator records that capability in `https`
+            # for every protocol, so only tunnel-capable rows may serve CONNECT.
+            where += " AND https=1"
         order = {
             "round_robin": "latency_ms IS NULL, latency_ms",
             "least_used": "requests ASC, latency_ms IS NULL, latency_ms",
@@ -164,7 +170,7 @@ class Gateway:
             async with db().execute(
                 f"SELECT ip, port, protocol, latency_ms FROM proxies {where} "
                 f"ORDER BY {order} LIMIT 32",
-                tuple(protocols),
+                tuple(params),
             ) as cur:
                 rows = [dict(r) for r in await cur.fetchall()]
             if not rows:
@@ -371,7 +377,7 @@ class Gateway:
                 return
             port = struct.unpack(">H", await reader.readexactly(2))[0]
 
-            proxy = await self._pick()
+            proxy = await self._pick(require_tunnel=(port == 443))
             if not proxy:
                 writer.write(b"\x05\x01\x00\x01" + b"\x00" * 6)
                 await writer.drain()
@@ -422,7 +428,7 @@ class Gateway:
                     port = int(raw_port)
                 except ValueError:
                     host, port = target, 443
-                proxy = await self._pick()
+                proxy = await self._pick(require_tunnel=True)
                 if not proxy:
                     writer.write(b"HTTP/1.1 503 No Proxy\r\nContent-Length: 0\r\n\r\n")
                     await writer.drain()

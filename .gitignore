@@ -7,3 +7,7 @@ __pycache__/
 web/node_modules/
 .DS_Store
 docs/raw/
+
+# local smoke artifacts
+.smoke.*
+*.cookies
