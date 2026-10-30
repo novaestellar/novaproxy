@@ -69,6 +69,7 @@ CREATE TABLE IF NOT EXISTS target_hits (
     fail INTEGER NOT NULL DEFAULT 0,
     last_ok TEXT,
     last_fail TEXT,
+    blocked_until TEXT,
     PRIMARY KEY (host, ip, port, protocol)
 );
 CREATE INDEX IF NOT EXISTS idx_target_hits_host ON target_hits(host, ok);
@@ -113,13 +114,20 @@ async def init_db() -> aiosqlite.Connection:
     return _conn
 
 
+_TARGET_MIGRATIONS = {
+    "blocked_until": "TEXT",
+}
+
+
 async def _migrate(conn: aiosqlite.Connection) -> None:
     """Add columns introduced after the first schema revision (idempotent)."""
-    async with conn.execute("PRAGMA table_info(proxies)") as cur:
-        existing = {row["name"] for row in await cur.fetchall()}
-    for column, ddl in _PROXY_MIGRATIONS.items():
-        if column not in existing:
-            await conn.execute(f"ALTER TABLE proxies ADD COLUMN {column} {ddl}")
+    for table, migrations in (("proxies", _PROXY_MIGRATIONS),
+                              ("target_hits", _TARGET_MIGRATIONS)):
+        async with conn.execute(f"PRAGMA table_info({table})") as cur:
+            existing = {row["name"] for row in await cur.fetchall()}
+        for column, ddl in migrations.items():
+            if column not in existing:
+                await conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
 
 
 

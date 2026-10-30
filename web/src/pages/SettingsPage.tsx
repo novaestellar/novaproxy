@@ -118,8 +118,27 @@ function SourcesCard() {
             <Input
               value={url}
               onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://example.com/proxies.txt"
+              placeholder="https://raw.githubusercontent.com/user/repo/main/http.txt"
             />
+            <div className="mt-1.5 space-y-1 text-[11px] leading-relaxed text-faint">
+              <div>
+                One URL per gate. Must start with{" "}
+                <code className="font-mono text-muted">http://</code> or{" "}
+                <code className="font-mono text-muted">https://</code> and return a plain
+                list — one <code className="font-mono text-muted">ip:port</code> per line.
+                Extra columns are ignored.
+              </div>
+              <div>
+                Lines that carry their own scheme (
+                <code className="font-mono text-muted">http://1.2.3.4:8080</code>,{" "}
+                <code className="font-mono text-muted">socks5://1.2.3.4:1080</code>) keep
+                it; bare lines use the protocol you pick on the right.
+              </div>
+              <div>
+                Adding probes the feed right away and reports how many addresses came
+                back. JSON APIs are not parsed — only text feeds.
+              </div>
+            </div>
           </div>
           <div className="w-32">
             <Label>Protocol</Label>

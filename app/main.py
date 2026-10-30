@@ -15,7 +15,7 @@ from app.config import (ADMIN_USERNAME, ADMIN_PASSWORD, ADMIN_PASSWORD_GENERATED
                         VALIDATE_TIMEOUT, VALIDATE_CONCURRENCY, MAX_FAILED_CHECKS,
                         MAX_CANDIDATES, AUTO_DEDUPE, GEO_ENRICH, GEO_MAX,
                         SITE_CHECK_TIMEOUT, SITE_CHECK_LIMIT, SITE_CHECK_CONCURRENCY,
-                        AUTH_MODE)
+                        AUTH_MODE, AUTOPOOL_ENABLED)
 from app.database import init_db, db, execute, executemany
 from app.security import (create_user, get_user, verify_password,
                           create_session, session_user, destroy_session)
@@ -44,9 +44,11 @@ async def lifespan(app: FastAPI):
                 print("   save it now - only the hash is stored")
             else:
                 print(f"!! bootstrapped admin '{ADMIN_USERNAME}' from NP_ADMIN_PASS")
-    autopool_task = asyncio.create_task(_autopool_loop())
+    autopool_task = (asyncio.create_task(_autopool_loop())
+                     if AUTOPOOL_ENABLED else None)
     yield
-    autopool_task.cancel()
+    if autopool_task:
+        autopool_task.cancel()
     await gateway.stop()
 
 

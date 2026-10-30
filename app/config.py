@@ -5,7 +5,7 @@ DB_PATH = os.getenv("NP_DB", "novaproxy.db")
 
 # Admin bootstrap (created on first run, only while the users table is empty).
 # There is no baked-in default: without NP_ADMIN_PASS a random password is
-# generated and printed once. A fixed "admin123" in a public repo is a login
+# generated and printed once. A hardcoded default in a public repo is a login
 # waiting to be found.
 ADMIN_USERNAME = os.getenv("NP_ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.getenv("NP_ADMIN_PASS") or secrets.token_urlsafe(12)
@@ -52,3 +52,7 @@ SIGNUP_SOURCES = [
 # demands a session for anything arriving from another host; "on" always
 # requires a login even on 127.0.0.1.
 AUTH_MODE = os.getenv("NP_AUTH", "local")
+
+# Auto-harvest loop. Disable with NP_AUTOPOOL=0 (tests, or when you
+# want the pool to stay exactly as it is).
+AUTOPOOL_ENABLED = os.getenv("NP_AUTOPOOL", "1") != "0"

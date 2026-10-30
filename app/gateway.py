@@ -36,6 +36,8 @@ DEFAULT_SETTINGS = {
     "quota_mb": 0,                   # 0 = unlimited, applied to new rows on start
     "timeout": 8.0,
     "max_fails": 2,
+    "max_per_proxy": 2,              # concurrent client tunnels per row
+    "host_block_minutes": 10,        # cool-off after a 429 from a target
     "retries": 4,                    # upstream attempts per client request
     "hedge_delay": 0.6,              # start the next attempt this early
     "deadline": 3.0,                 # hard ceiling for opening a tunnel
@@ -97,6 +99,11 @@ class Gateway:
         self._hot_at = 0.0
         self._target_cache: dict[str, tuple[float, set]] = {}
         self._pick_n = 0
+        # Live tunnels per row, so one proxy is not handed to every client
+        # that arrives at the same moment.
+        self._inflight: dict[tuple[str, int, str], int] = {}
+        self._blocked_cache: dict[str, tuple[float, set]] = {}
+        self._last_status = 0
         self._sample = {"in": 0, "out": 0, "req": 0, "at": time.time()}
 
     # ── settings ────────────────────────────────────────────────────
@@ -129,7 +136,8 @@ class Gateway:
             if key not in allowed:
                 continue
             if key in ("socks_port", "http_port", "max_fails", "retries",
-                       "health_batch", "verified_window"):
+                       "health_batch", "verified_window", "max_per_proxy",
+                       "host_block_minutes"):
                 value = int(value)
             elif key in ("timeout", "quota_mb", "health_interval", "hedge_delay",
                          "deadline", "first_byte_timeout", "idle_timeout"):
@@ -248,6 +256,16 @@ class Gateway:
             if avoid:
                 rows = [r for r in rows
                         if (r["ip"], int(r["port"]), r["protocol"]) not in avoid]
+            if host:
+                blocked = await self._blocked_for(host)
+                if blocked:
+                    rows = [r for r in rows
+                            if (r["ip"], int(r["port"]), r["protocol"]) not in blocked]
+            cap = max(1, int(self.settings["max_per_proxy"]))
+            if self._inflight:
+                rows = [r for r in rows
+                        if self._inflight.get(
+                            (r["ip"], int(r["port"]), r["protocol"]), 0) < cap]
             if not rows:
                 return None
             if host:
@@ -265,6 +283,75 @@ class Gateway:
                         rows = local
             self._rr = (self._rr + 1) % len(rows)
             return rows[self._rr]
+
+    # ── per-row bookkeeping ─────────────────────────────────────────
+    def _reserve(self, proxy: dict) -> None:
+        key = (proxy["ip"], int(proxy["port"]), proxy["protocol"])
+        self._inflight[key] = self._inflight.get(key, 0) + 1
+
+    def _release(self, proxy: dict) -> None:
+        key = (proxy["ip"], int(proxy["port"]), proxy["protocol"])
+        left = self._inflight.get(key, 0) - 1
+        if left > 0:
+            self._inflight[key] = left
+        else:
+            self._inflight.pop(key, None)
+
+    async def _blocked_for(self, host: str) -> set[tuple[str, int, str]]:
+        """Rows this host told us to back off from (429 / 402 / 407)."""
+        now = time.time()
+        cached = self._blocked_cache.get(host)
+        if cached and now - cached[0] < 10:
+            return cached[1]
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(now))
+        blocked: set[tuple[str, int, str]] = set()
+        async with db().execute(
+            "SELECT ip, port, protocol FROM target_hits "
+            "WHERE host=? AND blocked_until IS NOT NULL AND blocked_until > ?",
+            (host, stamp),
+        ) as cur:
+            for row in await cur.fetchall():
+                blocked.add((row["ip"], int(row["port"]), row["protocol"]))
+        self._blocked_cache[host] = (now, blocked)
+        return blocked
+
+    async def _block_host(self, host: str, proxy: dict) -> None:
+        """Remember that this exit is being rate-limited by this host."""
+        minutes = max(1, int(self.settings["host_block_minutes"]))
+        until = time.strftime("%Y-%m-%dT%H:%M:%S",
+                              time.localtime(time.time() + minutes * 60))
+        try:
+            await execute(
+                "INSERT INTO target_hits (host, ip, port, protocol, ok, fail, "
+                "blocked_until) VALUES (?,?,?,?,0,1,?) "
+                "ON CONFLICT(host, ip, port, protocol) DO UPDATE SET "
+                "fail = fail + 1, blocked_until = excluded.blocked_until",
+                (host, proxy["ip"], proxy["port"], proxy["protocol"], until),
+            )
+        except Exception:
+            pass
+        self._blocked_cache.pop(host, None)
+
+    async def _peek_head(self, reader, timeout: float = 6.0):
+        """Read one response head and return (status, raw bytes)."""
+        head = b""
+        try:
+            while b"\r\n\r\n" not in head and len(head) < 32768:
+                chunk = await asyncio.wait_for(reader.read(4096), timeout)
+                if not chunk:
+                    break
+                head += chunk
+        except Exception:
+            return None, head
+        status = None
+        first, _, _ = head.partition(b"\r\n")
+        parts = first.split()
+        if len(parts) >= 2 and parts[0].startswith(b"HTTP/"):
+            try:
+                status = int(parts[1])
+            except ValueError:
+                status = None
+        return status, head
 
     async def _mark_failed(self, proxy: dict, error: str) -> None:
         max_fails = int(self.settings["max_fails"])
@@ -324,7 +411,8 @@ class Gateway:
              proxy["ip"], proxy["port"], proxy["protocol"]),
         )
 
-    async def _connect(self, host: str, port: int, require_tunnel: bool):
+    async def _connect(self, host: str, port: int, require_tunnel: bool,
+                       avoid: set[tuple[str, int, str]] | None = None):
         """Open a tunnel with a hedged retry ladder.
 
         Dead rows on a free pool hang instead of refusing, so waiting for one
@@ -336,7 +424,7 @@ class Gateway:
         tries = max(1, int(self.settings["retries"]))
         hedge = max(0.2, float(self.settings["hedge_delay"]))
         picks: list[dict] = []
-        avoid: set[tuple[str, int, str]] = set()
+        avoid = set(avoid or ())
         for _ in range(tries):
             proxy = await self._pick(require_tunnel, avoid, host)
             if not proxy:
@@ -367,6 +455,7 @@ class Gateway:
                         exc = task.exception()
                         if exc is None:
                             up_r, up_w, proxy, started = task.result()
+                            self._reserve(proxy)
                             return up_r, up_w, proxy, started
                         errors.append(exc)
                         self.fails += 1
@@ -380,7 +469,15 @@ class Gateway:
             if usage:
                 for task in usage:
                     task.cancel()
-                await asyncio.gather(*usage, return_exceptions=True)
+                leftovers = await asyncio.gather(*usage, return_exceptions=True)
+                # A hedged attempt that finished after the winner still owns
+                # an open socket; close it instead of leaking one per request.
+                for result in leftovers:
+                    if isinstance(result, tuple) and len(result) == 4:
+                        try:
+                            result[1].close()
+                        except Exception:
+                            pass
         raise errors[-1] if errors else NoProxyAvailable("no proxy available")
 
     # ── background health ───────────────────────────────────────────
@@ -398,7 +495,14 @@ class Gateway:
         """Re-probe the stalest rows so `alive` and `https` stay current."""
         from app.validator import check
 
-        batch = max(1, int(self.settings["health_batch"]))
+        async with db().execute(
+            "SELECT COUNT(*) c FROM proxies WHERE alive=1 AND excluded=0"
+        ) as cur:
+            alive = (await cur.fetchone())["c"]
+        # A fixed batch means a 1 400-row pool needs ~17 minutes per sweep.
+        # Scale it up with the pool, bounded so the box stays responsive.
+        want = max(int(self.settings["health_batch"]), alive // 30)
+        batch = max(1, min(400, want))
         async with db().execute(
             "SELECT ip, port, protocol FROM proxies "
             "WHERE alive=1 AND excluded=0 "
@@ -541,6 +645,7 @@ class Gateway:
         finally:
             self.sessions.pop(sid, None)
             self.active -= 1
+            self._release(proxy)
             await self._persist_session(session)
             # Verification is evidence, not intention: a row counts as verified
             # only once the upstream actually sent bytes back. A row that
@@ -661,8 +766,16 @@ class Gateway:
                 await writer.drain()
                 return
 
-            writer.write(b"\x05\x00\x00\x01" + b"\x00" * 6)
-            await writer.drain()
+            try:
+                writer.write(b"\x05\x00\x00\x01" + b"\x00" * 6)
+                await writer.drain()
+            except Exception:
+                self._release(proxy)
+                try:
+                    up_w.close()
+                except Exception:
+                    pass
+                return
             self.connections += 1
             await self._relay(reader, writer, up_r, up_w, proxy, started, host)
         except Exception:
@@ -709,8 +822,16 @@ class Gateway:
                                  + str(len(msg)).encode() + b"\r\n\r\n" + msg)
                     await writer.drain()
                     return
-                writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-                await writer.drain()
+                try:
+                    writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                    await writer.drain()
+                except Exception:
+                    self._release(proxy)
+                    try:
+                        up_w.close()
+                    except Exception:
+                        pass
+                    return
                 self.connections += 1
                 await self._relay(reader, writer, up_r, up_w, proxy, started, host)
                 return
@@ -726,20 +847,46 @@ class Gateway:
             if parts.query:
                 path += "?" + parts.query
             rewritten = f"{method} {path} {version}\r\n".encode() + rest
-            try:
-                up_r, up_w, proxy, started = await self._connect(host, port, port == 443)
-            except NoProxyAvailable:
-                writer.write(b"HTTP/1.1 503 No Proxy\r\nContent-Length: 0\r\n\r\n")
-                await writer.drain()
+            # A tunnel is opaque for https, but an absolute-URI request lets us
+            # read the upstream status before the client sees it. If the exit is
+            # being rate-limited by this host, remember that and try another
+            # proxy instead of handing the client a 429.
+            attempts = max(1, int(self.settings["retries"]))
+            used: set[tuple[str, int, str]] = set()
+            for attempt in range(attempts):
+                try:
+                    up_r, up_w, proxy, started = await self._connect(
+                        host, port, port == 443, avoid=used)
+                except NoProxyAvailable:
+                    writer.write(b"HTTP/1.1 503 No Proxy\r\nContent-Length: 0\r\n\r\n")
+                    await writer.drain()
+                    return
+                except Exception:
+                    if attempt + 1 >= attempts:
+                        writer.write(b"HTTP/1.1 502 Bad Gateway\r\n"
+                                     b"Content-Length: 0\r\n\r\n")
+                        await writer.drain()
+                        return
+                    continue
+                up_w.write(rewritten)
+                await up_w.drain()
+                status, head = await self._peek_head(up_r)
+                if status in (402, 407, 429) and attempt + 1 < attempts:
+                    self._last_status = status
+                    await self._block_host(host, proxy)
+                    self._release(proxy)
+                    try:
+                        up_w.close()
+                    except Exception:
+                        pass
+                    used.add((proxy["ip"], int(proxy["port"]), proxy["protocol"]))
+                    continue
+                if head:
+                    writer.write(head)
+                    await writer.drain()
+                self.connections += 1
+                await self._relay(reader, writer, up_r, up_w, proxy, started, host)
                 return
-            except Exception:
-                writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
-                await writer.drain()
-                return
-            up_w.write(rewritten)
-            await up_w.drain()
-            self.connections += 1
-            await self._relay(reader, writer, up_r, up_w, proxy, started, host)
         except Exception:
             pass
         finally:
@@ -786,6 +933,10 @@ class Gateway:
             "timeout": self.settings["timeout"],
             "max_fails": self.settings["max_fails"],
             "retries": self.settings["retries"],
+            "max_per_proxy": self.settings["max_per_proxy"],
+            "host_block_minutes": self.settings["host_block_minutes"],
+            "inflight": sum(self._inflight.values()),
+            "last_upstream_status": self._last_status,
             "hedge_delay": self.settings["hedge_delay"],
             "deadline": self.settings["deadline"],
             "first_byte_timeout": self.settings["first_byte_timeout"],
