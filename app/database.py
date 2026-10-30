@@ -69,6 +69,7 @@ _PROXY_MIGRATIONS = {
     "quota_bytes": "INTEGER NOT NULL DEFAULT 0",
     "excluded": "INTEGER NOT NULL DEFAULT 0",
     "last_used": "TEXT",
+    "verified_at": "TEXT",
 }
 
 

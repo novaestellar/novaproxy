@@ -1,4 +1,4 @@
-FROM node:20-slim AS web
+﻿FROM node:20-slim AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
@@ -16,5 +16,5 @@ RUN (playwright install --with-deps chromium || playwright install chromium || t
 
 COPY . .
 COPY --from=web /web/dist ./web/dist
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 12000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "12000"]

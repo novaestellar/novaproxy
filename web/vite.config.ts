@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+﻿import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
@@ -11,9 +11,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": "http://127.0.0.1:8000",
-      "/login": "http://127.0.0.1:8000",
-      "/register": "http://127.0.0.1:8000",
+      "/api": "http://127.0.0.1:12000",
+      "/login": "http://127.0.0.1:12000",
+      "/register": "http://127.0.0.1:12000",
     },
   },
   build: { outDir: "dist", emptyOutDir: true },

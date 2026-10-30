@@ -1,6 +1,6 @@
-"""Record a product demo video of the NovaProxy console.
+﻿"""Record a product demo video of the NovaProxy console.
 
-Requires the server on http://127.0.0.1:8000, Playwright Chromium
+Requires the server on http://127.0.0.1:12000, Playwright Chromium
 (`playwright install chromium`) and optionally imageio-ffmpeg for the MP4 copy.
 Usage: .venv/Scripts/python.exe scripts/record_demo.py
 """
@@ -10,7 +10,7 @@ from pathlib import Path
 
 from playwright.async_api import async_playwright
 
-BASE = "http://127.0.0.1:8000"
+BASE = "http://127.0.0.1:12000"
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "docs"
 RAW = DOCS / "raw"

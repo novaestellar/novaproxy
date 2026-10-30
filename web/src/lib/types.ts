@@ -104,6 +104,9 @@ export type GatewayStatus = {
   quota_mb: number;
   timeout: number;
   max_fails: number;
+  retries: number;
+  health_interval: number;
+  health_batch: number;
   enabled_protocols: string[];
   connections: number;
   fails: number;
@@ -111,7 +114,14 @@ export type GatewayStatus = {
   bytes_in: number;
   bytes_out: number;
   uptime_s: number;
-  pool: { eligible: number; bytes: number; requests: number; quota_rows: number };
+  pool: {
+    eligible: number;
+    bytes: number;
+    requests: number;
+    quota_rows: number;
+    verified: number;
+    tunnel_capable: number;
+  };
   warnings: string[];
   last_error: string;
 };

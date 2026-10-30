@@ -49,8 +49,11 @@ export function GatewayPage() {
     quota_mb: 0,
     timeout: 12,
     max_fails: 3,
-    socks_port: 11080,
-    http_port: 8120,
+    retries: 3,
+    health_interval: 45,
+    health_batch: 24,
+    socks_port: 11500,
+    http_port: 12500,
   });
 
   useEffect(() => {
@@ -60,10 +63,23 @@ export function GatewayPage() {
       quota_mb: data.quota_mb,
       timeout: data.timeout,
       max_fails: data.max_fails,
+      retries: data.retries,
+      health_interval: data.health_interval,
+      health_batch: data.health_batch,
       socks_port: data.socks_port,
       http_port: data.http_port,
     });
-  }, [data?.strategy, data?.quota_mb, data?.timeout, data?.max_fails, data?.socks_port, data?.http_port]);
+  }, [
+    data?.strategy,
+    data?.quota_mb,
+    data?.timeout,
+    data?.max_fails,
+    data?.retries,
+    data?.health_interval,
+    data?.health_batch,
+    data?.socks_port,
+    data?.http_port,
+  ]);
 
   const start = useMutation({
     mutationFn: api.gatewayStart,
@@ -195,7 +211,7 @@ export function GatewayPage() {
         <Stat
           label="Eligible proxies"
           value={data.pool.eligible.toLocaleString()}
-          hint={data.pool.quota_rows ? `${data.pool.quota_rows} with quota` : "no quotas set"}
+          hint={`${data.pool.tunnel_capable} TLS-capable · ${data.pool.verified} verified`}
         />
       </div>
 
@@ -309,6 +325,36 @@ export function GatewayPage() {
                   max={10}
                   value={form.max_fails}
                   onChange={(e) => setForm({ ...form, max_fails: Number(e.target.value) })}
+                />
+              </div>
+              <div>
+                <Label>Attempts per request</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={8}
+                  value={form.retries}
+                  onChange={(e) => setForm({ ...form, retries: Number(e.target.value) })}
+                />
+              </div>
+              <div>
+                <Label>Health interval (s)</Label>
+                <Input
+                  type="number"
+                  min={10}
+                  max={600}
+                  value={form.health_interval}
+                  onChange={(e) => setForm({ ...form, health_interval: Number(e.target.value) })}
+                />
+              </div>
+              <div>
+                <Label>Health rows per pass</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={200}
+                  value={form.health_batch}
+                  onChange={(e) => setForm({ ...form, health_batch: Number(e.target.value) })}
                 />
               </div>
               <div>

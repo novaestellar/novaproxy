@@ -1,6 +1,6 @@
-<p align="center">
+﻿<p align="center">
   <strong>Self-hosted proxy harvesting console</strong><br>
-  Harvest · validate · dedupe · geo-enrich · test any URL through the pool
+  Harvest Â· validate Â· dedupe Â· geo-enrich Â· test any URL through the pool
 </p>
 
 <p align="center">
@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/FastAPI-asyncio-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square&logo=react&logoColor=black" alt="React">
   <img src="https://img.shields.io/badge/SQLite-WAL-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite">
-  <img src="https://img.shields.io/badge/port-8000-8b5cf6?style=flat-square" alt="Port">
+  <img src="https://img.shields.io/badge/port-12000-8b5cf6?style=flat-square" alt="Port">
 </p>
 
 ---
@@ -18,7 +18,7 @@
 NovaProxy is a local control panel for building and maintaining a working proxy
 pool, and for serving it as one endpoint. You set a target count; it pulls public
 proxy feeds, validates every candidate against live judges, keeps the survivors,
-removes duplicates, enriches them with geo data — then a built-in gateway exposes
+removes duplicates, enriches them with geo data â€” then a built-in gateway exposes
 the pool as local SOCKS5 and HTTP, with rotation, failover, byte accounting and
 per-proxy quotas.
 
@@ -48,7 +48,7 @@ They solve different layers. Neither is a replacement for the other.
 | **Dedupe** | SQL window function, 5 trigger points | Not applicable |
 | **Geo enrichment** | ip-api batch, 100 per call | Not applicable |
 | **URL test** | Up to 200 alive proxies per check | Not available |
-| **Gateway** | SOCKS5 `:11080` + HTTP `:8120`, rotation + failover | SOCKS5 `:1080` + HTTP `:8118`, rotation + failover |
+| **Gateway** | SOCKS5 `:11500` + HTTP `:12500`, rotation + failover | SOCKS5 `:1080` + HTTP `:8118`, rotation + failover |
 | **Analytics** | Traffic samples, quota buckets, protocol split | Pool table with per-account bytes |
 | **UI** | React SPA, live SSE, multi-user | Single admin page |
 | **Failure mode** | Yield drops when public lists rot | Whole pool dies when entitlement is revoked |
@@ -56,8 +56,8 @@ They solve different layers. Neither is a replacement for the other.
 Rule of thumb:
 
 - **Bulk, non-identity traffic** (scraping, rate-limit spreading, geo checks,
-  load distribution) → NovaProxy. Free, unlimited, disposable.
-- **Identity-sensitive traffic** (signup, anti-bot, per-account isolation) →
+  load distribution) â†’ NovaProxy. Free, unlimited, disposable.
+- **Identity-sensitive traffic** (signup, anti-bot, per-account isolation) â†’
   residential. NovaProxy cannot help there, by design.
 
 If the residential lane is already covered, NovaProxy is strictly additional
@@ -66,10 +66,10 @@ click.
 
 ## Demo
 
-A 52-second walkthrough (login → live run → pool → site check → logs → settings):
+A 52-second walkthrough (login â†’ live run â†’ pool â†’ site check â†’ logs â†’ settings):
 
-- [`docs/novaproxy-demo.mp4`](docs/novaproxy-demo.mp4) — H.264, 1440×900
-- [`docs/novaproxy-demo-poster.png`](docs/novaproxy-demo-poster.png) — poster frame
+- [`docs/novaproxy-demo.mp4`](docs/novaproxy-demo.mp4) â€” H.264, 1440Ã—900
+- [`docs/novaproxy-demo-poster.png`](docs/novaproxy-demo-poster.png) â€” poster frame
 
 Regenerate it against a local server:
 
@@ -85,8 +85,8 @@ optional MP4 copy needs `pip install imageio-ffmpeg`.
 ## Requirements
 
 - Python **3.12+**
-- Node.js **20+** — only to rebuild the frontend (a prebuilt `web/dist` is included)
-- Playwright Chromium — only for signup-gated sources and the demo recorder
+- Node.js **20+** â€” only to rebuild the frontend (a prebuilt `web/dist` is included)
+- Playwright Chromium â€” only for signup-gated sources and the demo recorder
 
 ## Install and run
 
@@ -98,7 +98,7 @@ pip install -r requirements.txt
 python run.py
 ```
 
-Open **http://127.0.0.1:8000**.
+Open **http://127.0.0.1:12000**.
 
 The React build in `web/dist` is served by FastAPI, so no second process is
 needed. If `web/dist` is missing, the API returns a 503 with build instructions.
@@ -112,7 +112,7 @@ python run.py
 # terminal 2
 cd web
 npm install
-npm run dev      # http://127.0.0.1:5173, /api proxied to :8000
+npm run dev      # http://127.0.0.1:5173, /api proxied to :12000
 ```
 
 | Command | Purpose |
@@ -125,7 +125,7 @@ npm run dev      # http://127.0.0.1:5173, /api proxied to :8000
 
 ```bash
 docker build -t novaproxy .
-docker run -d --name novaproxy -p 8000:8000 \
+docker run -d --name novaproxy -p 12000:12000 \
   -e NP_ADMIN_USER=admin -e NP_ADMIN_PASS=change-me \
   -e NP_DB=/app/data/novaproxy.db \
   -v "$(pwd)/data:/app/data" novaproxy
@@ -157,12 +157,12 @@ Registration is open by default. To make the instance invite-only, remove
 ## How it works
 
 ```
-Browser ── React SPA ── /api ── FastAPI ── SQLite
-                              │
-                              ├── sources/public.py   12+ public feeds + GeoNode
-                              ├── sources/custom.py   temp-mail + Playwright
-                              ├── validator.py        concurrent judges
-                              └── sitecheck.py        arbitrary URL tests
+Browser â”€â”€ React SPA â”€â”€ /api â”€â”€ FastAPI â”€â”€ SQLite
+                              â”‚
+                              â”œâ”€â”€ sources/public.py   12+ public feeds + GeoNode
+                              â”œâ”€â”€ sources/custom.py   temp-mail + Playwright
+                              â”œâ”€â”€ validator.py        concurrent judges
+                              â””â”€â”€ sitecheck.py        arbitrary URL tests
 ```
 
 ### Collection loop
@@ -180,8 +180,8 @@ Final states: `done`, `stopped`, `exhausted`.
 
 Each candidate is tried against two independent judges, in order:
 
-1. `http://httpbin.org/get` — echoes request headers, used for anonymity class.
-2. `http://ip-api.com/json` — independent reachability + egress IP.
+1. `http://httpbin.org/get` â€” echoes request headers, used for anonymity class.
+2. `http://ip-api.com/json` â€” independent reachability + egress IP.
 
 Latency is measured only on the attempt that actually answered. Anonymity is
 classified as `elite` (no `Via`, no `X-Forwarded-For`), `anonymous` (headers
@@ -198,7 +198,7 @@ Rows are partitioned by `ip:port`. The survivor is chosen by:
 4. most recent check
 
 Duplicates are removed at startup, when a run starts, after every round, after a
-recheck, and from **Settings → Remove duplicates**. The number removed is written
+recheck, and from **Settings â†’ Remove duplicates**. The number removed is written
 to the engine log.
 
 ### Site check
@@ -219,32 +219,32 @@ of 100, capped at `GEO_MAX` per run, with a 4-second gap between groups.
 ## Gateway
 
 The gateway turns the pool into one local endpoint, so applications do not need a
-proxy list — they need one address.
+proxy list â€” they need one address.
 
 | Listener | Default | Protocol |
 |---|---|---|
-| SOCKS5 | `127.0.0.1:11080` | SOCKS5 CONNECT, no auth on the client side |
-| HTTP | `127.0.0.1:8120` | `CONNECT` tunnels + absolute-URI forwarding |
+| SOCKS5 | `127.0.0.1:11500` | SOCKS5 CONNECT, no auth on the client side |
+| HTTP | `127.0.0.1:12500` | `CONNECT` tunnels + absolute-URI forwarding |
 
 ```bash
 # HTTP
-curl -x http://127.0.0.1:8120 https://api.ipify.org
+curl -x http://127.0.0.1:12500 https://api.ipify.org
 
 # SOCKS5
-curl --socks5-hostname 127.0.0.1:11080 https://api.ipify.org
+curl --socks5-hostname 127.0.0.1:11500 https://api.ipify.org
 ```
 
 Behaviour, mirroring what novastar's residential gateway got right:
 
-- **Rotation** — `round_robin`, `least_used` or `fastest`, selected in Settings.
-- **Failover** — one failed upstream does not fail the request; the next eligible
+- **Rotation** â€” `round_robin`, `least_used` or `fastest`, selected in Settings.
+- **Failover** â€” one failed upstream does not fail the request; the next eligible
   proxy is tried. Failures accrue; three marks the row dead.
-- **Quota** — every relayed byte is counted per proxy (`bytes_in`, `bytes_out`),
+- **Quota** â€” every relayed byte is counted per proxy (`bytes_in`, `bytes_out`),
   with an optional allowance in MB. A proxy at its cap is skipped before the
   connection opens, not after the upstream rejects it.
-- **Exclusion** — drop a proxy from rotation without deleting it; restore it in
+- **Exclusion** â€” drop a proxy from rotation without deleting it; restore it in
   one click.
-- **Live counters** — connections, active relays, failures, bytes both ways.
+- **Live counters** â€” connections, active relays, failures, bytes both ways.
 
 Ports and quota are persisted in the database (table `kv`), so a restart keeps
 them. Changing ports requires stopping and starting the gateway.
@@ -287,9 +287,9 @@ Gateway defaults (editable from the UI, stored in the database):
 
 | Key | Default | Meaning |
 |---|---|---|
-| `socks_port` | `11080` | SOCKS5 listener |
-| `http_port` | `8120` | HTTP listener |
-| `strategy` | `round_robin` | `round_robin` · `least_used` · `fastest` |
+| `socks_port` | `11500` | SOCKS5 listener |
+| `http_port` | `12500` | HTTP listener |
+| `strategy` | `round_robin` | `round_robin` Â· `least_used` Â· `fastest` |
 | `quota_mb` | `0` | Per-proxy allowance; `0` = unlimited |
 | `timeout` | `12` | Upstream connect timeout (seconds) |
 | `max_fails` | `3` | Failures before a proxy is marked dead |
@@ -363,16 +363,16 @@ Example:
 ```bash
 curl -c cookies.txt \
   -d 'username=admin&password=change-me' \
-  http://127.0.0.1:8000/api/login
+  http://127.0.0.1:12000/api/login
 
 curl -b cookies.txt \
-  'http://127.0.0.1:8000/api/proxies/export?protocol=socks5' \
+  'http://127.0.0.1:12000/api/proxies/export?protocol=socks5' \
   -o socks5.txt
 ```
 
 ## Data
 
-- `novaproxy.db` — users, sessions, proxy pool, site-check history
+- `novaproxy.db` â€” users, sessions, proxy pool, site-check history
 - SQLite runs in WAL mode with a 10-second busy timeout
 - Delete the database to start over; the admin account is recreated from the
   environment on the next start
@@ -381,32 +381,32 @@ curl -b cookies.txt \
 
 ```
 novaproxy/
-├── run.py
-├── requirements.txt
-├── Dockerfile
-├── .env.example
-├── app/
-│   ├── main.py          API, auth, SSE, SPA hosting
-│   ├── engine.py        collection loop, dedupe, recheck
-│   ├── gateway.py       SOCKS5 + HTTP gateway, rotation, quota metering
-│   ├── validator.py     concurrent proxy judges
-│   ├── sitecheck.py     URL tests through proxies
-│   ├── sources/
-│   │   ├── public.py
-│   │   └── custom.py
-│   ├── security.py
-│   ├── database.py
-│   ├── tempmail.py
-│   └── config.py
-├── web/
-│   ├── src/             React pages, components, API client
-│   ├── dist/            production build served by FastAPI
-│   └── package.json
-├── scripts/
-│   └── record_demo.py   demo recorder
-└── docs/
-    ├── novaproxy-demo.mp4
-    └── novaproxy-demo-poster.png
+â”œâ”€â”€ run.py
+â”œâ”€â”€ requirements.txt
+â”œâ”€â”€ Dockerfile
+â”œâ”€â”€ .env.example
+â”œâ”€â”€ app/
+â”‚   â”œâ”€â”€ main.py          API, auth, SSE, SPA hosting
+â”‚   â”œâ”€â”€ engine.py        collection loop, dedupe, recheck
+â”‚   â”œâ”€â”€ gateway.py       SOCKS5 + HTTP gateway, rotation, quota metering
+â”‚   â”œâ”€â”€ validator.py     concurrent proxy judges
+â”‚   â”œâ”€â”€ sitecheck.py     URL tests through proxies
+â”‚   â”œâ”€â”€ sources/
+â”‚   â”‚   â”œâ”€â”€ public.py
+â”‚   â”‚   â””â”€â”€ custom.py
+â”‚   â”œâ”€â”€ security.py
+â”‚   â”œâ”€â”€ database.py
+â”‚   â”œâ”€â”€ tempmail.py
+â”‚   â””â”€â”€ config.py
+â”œâ”€â”€ web/
+â”‚   â”œâ”€â”€ src/             React pages, components, API client
+â”‚   â”œâ”€â”€ dist/            production build served by FastAPI
+â”‚   â””â”€â”€ package.json
+â”œâ”€â”€ scripts/
+â”‚   â””â”€â”€ record_demo.py   demo recorder
+â””â”€â”€ docs/
+    â”œâ”€â”€ novaproxy-demo.mp4
+    â””â”€â”€ novaproxy-demo-poster.png
 ```
 
 ## Packaging
@@ -441,6 +441,6 @@ Exclude the database to ship a clean instance that bootstraps the admin from
 ## Legal
 
 NovaProxy aggregates proxies published openly and for free by their maintainers.
-Respect each source's terms of service. Free proxies are operated by strangers —
+Respect each source's terms of service. Free proxies are operated by strangers â€”
 never send credentials, personal data or anything sensitive through them. Use the
 tool for legitimate testing, scraping and research.

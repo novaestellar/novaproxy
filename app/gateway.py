@@ -1,11 +1,17 @@
-"""NovaProxy gateway — one local SOCKS5/HTTP endpoint in front of the pool.
+﻿"""NovaProxy gateway — one local SOCKS5/HTTP endpoint in front of the pool.
 
 Adapted from novastar's gateway: rotation, failover, per-proxy byte accounting
 and quota enforcement. The difference is where the pool comes from — there are
 no credentials here, only the validated proxy rows NovaProxy already keeps.
 
-    app -> 127.0.0.1:1080  (SOCKS5)  \
-           127.0.0.1:8120  (HTTP)     -> pool -> rotating exit
+    app -> 127.0.0.1:11500 (SOCKS5)  \
+           127.0.0.1:12500 (HTTP)     -> pool -> rotating exit
+
+Three things keep the success rate up on a pool of free proxies:
+
+* every request gets a retry ladder, so one rotten row costs a retry, not a 502;
+* selection prefers rows that recently carried real traffic (`verified_at`);
+* a background health pass re-probes the stalest rows and keeps `https` honest.
 """
 from __future__ import annotations
 
@@ -21,14 +27,22 @@ from app.database import db, execute
 
 DEFAULT_SETTINGS = {
     "host": "127.0.0.1",
-    "socks_port": 11080,
-    "http_port": 8120,
+    "socks_port": 11500,
+    "http_port": 12500,
     "strategy": "round_robin",      # round_robin | least_used | fastest
     "quota_mb": 0,                   # 0 = unlimited, applied to new rows on start
-    "timeout": 12.0,
+    "timeout": 8.0,
     "max_fails": 3,
+    "retries": 3,                    # upstream attempts per client request
+    "hedge_delay": 1.2,              # start the next attempt this early
+    "health_interval": 30.0,         # seconds between background re-probes
+    "health_batch": 40,              # rows re-probed per pass
     "enabled_protocols": ["http", "socks5", "socks4"],
 }
+
+
+class NoProxyAvailable(RuntimeError):
+    """Nothing eligible could be picked — distinct from a proxy that failed."""
 
 
 def _addr_bytes(host: str) -> tuple[int, bytes]:
@@ -69,6 +83,8 @@ class Gateway:
         self.last_error = ""
         self._rr = 0
         self._flush_task: asyncio.Task | None = None
+        self._health_task: asyncio.Task | None = None
+        self._warm_task: asyncio.Task | None = None
         self._load_lock = asyncio.Lock()
         self._sample = {"in": 0, "out": 0, "req": 0, "at": time.time()}
 
@@ -84,6 +100,16 @@ class Gateway:
                         self.settings[key] = value
             except Exception:
                 pass
+        # Old builds shipped 11080/8120. Move them once so an existing database
+        # does not keep binding ports the operator no longer wants.
+        if self.settings["socks_port"] == 11080:
+            self.settings["socks_port"] = DEFAULT_SETTINGS["socks_port"]
+        if self.settings["http_port"] == 8120:
+            self.settings["http_port"] = DEFAULT_SETTINGS["http_port"]
+        # 12 s per upstream attempt made a dead proxy feel like a hang; the
+        # retry ladder covers the same ground faster.
+        if float(self.settings["timeout"]) == 12.0:
+            self.settings["timeout"] = DEFAULT_SETTINGS["timeout"]
         return self.settings
 
     async def apply_settings(self, patch: dict) -> dict:
@@ -91,9 +117,10 @@ class Gateway:
         for key, value in patch.items():
             if key not in allowed:
                 continue
-            if key in ("socks_port", "http_port", "max_fails"):
+            if key in ("socks_port", "http_port", "max_fails", "retries",
+                       "health_batch"):
                 value = int(value)
-            elif key in ("timeout", "quota_mb"):
+            elif key in ("timeout", "quota_mb", "health_interval", "hedge_delay"):
                 value = float(value)
             elif key == "enabled_protocols":
                 value = [p for p in value if p in ("http", "socks4", "socks5")]
@@ -130,6 +157,10 @@ class Gateway:
         self.started_at = time.time()
         self.last_error = ""
         self._flush_task = asyncio.create_task(self._flush_loop())
+        self._health_task = asyncio.create_task(self._health_loop())
+        # Warm one pass immediately: a gateway that starts on stale flags serves
+        # yesterday's pool for the first half minute otherwise.
+        self._warm_task = asyncio.create_task(self._health_pass())
         return {"ok": True,
                 "socks": f"{host}:{self.settings['socks_port']}",
                 "http": f"{host}:{self.settings['http_port']}"}
@@ -146,11 +177,18 @@ class Gateway:
         if self._flush_task:
             self._flush_task.cancel()
             self._flush_task = None
+        if self._health_task:
+            self._health_task.cancel()
+            self._health_task = None
+        if self._warm_task:
+            self._warm_task.cancel()
+            self._warm_task = None
         await self._flush_all()
         return {"ok": True}
 
     # ── pool selection ──────────────────────────────────────────────
-    async def _pick(self, require_tunnel: bool = False) -> dict | None:
+    async def _pick(self, require_tunnel: bool = False,
+                    avoid: set[tuple[str, int, str]] | None = None) -> dict | None:
         protocols = self.settings["enabled_protocols"] or ["http"]
         marks = ",".join("?" * len(protocols))
         where = (f"WHERE alive=1 AND excluded=0 AND protocol IN ({marks}) "
@@ -161,18 +199,26 @@ class Gateway:
             # https:// client. The validator records that capability in `https`
             # for every protocol, so only tunnel-capable rows may serve CONNECT.
             where += " AND https=1"
+        # Freshness beats raw latency on a pool that rots by the minute, but
+        # rotation still has to spread: hammering the same verified exits gets
+        # the whole pool 429'd by the target that matters.
+        fresh = "verified_at IS NULL, verified_at DESC"
+        spread = "last_used IS NULL, last_used ASC"
         order = {
-            "round_robin": "latency_ms IS NULL, latency_ms",
-            "least_used": "requests ASC, latency_ms IS NULL, latency_ms",
-            "fastest": "latency_ms IS NULL, latency_ms, requests ASC",
-        }.get(self.settings["strategy"], "latency_ms IS NULL, latency_ms")
+            "round_robin": f"{spread}, {fresh}, latency_ms IS NULL, latency_ms",
+            "least_used": f"requests ASC, {spread}, {fresh}",
+            "fastest": f"{fresh}, latency_ms IS NULL, latency_ms, requests ASC",
+        }.get(self.settings["strategy"], spread)
         async with self._load_lock:
             async with db().execute(
                 f"SELECT ip, port, protocol, latency_ms FROM proxies {where} "
-                f"ORDER BY {order} LIMIT 32",
+                f"ORDER BY {order} LIMIT 48",
                 tuple(params),
             ) as cur:
                 rows = [dict(r) for r in await cur.fetchall()]
+            if avoid:
+                rows = [r for r in rows
+                        if (r["ip"], int(r["port"]), r["protocol"]) not in avoid]
             if not rows:
                 return None
             self._rr = (self._rr + 1) % len(rows)
@@ -187,9 +233,125 @@ class Gateway:
             (max_fails, proxy["ip"], proxy["port"], proxy["protocol"]),
         )
 
+    async def _mark_ok(self, proxy: dict, latency_ms: int) -> None:
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        await execute(
+            "UPDATE proxies SET checks_failed=0, verified_at=?, last_used=?, "
+            "latency_ms=CASE WHEN ? > 0 THEN ? ELSE latency_ms END "
+            "WHERE ip=? AND port=? AND protocol=?",
+            (now, now, latency_ms, latency_ms,
+             proxy["ip"], proxy["port"], proxy["protocol"]),
+        )
+
+    async def _connect(self, host: str, port: int, require_tunnel: bool):
+        """Open a tunnel with a hedged retry ladder.
+
+        Dead rows on a free pool hang instead of refusing, so waiting for one
+        attempt to time out before starting the next is what makes the gateway
+        feel stuck. The next proxy starts after `hedge_delay` seconds while the
+        previous one is still trying; the first handshake that lands wins and
+        the rest are cancelled.
+        """
+        tries = max(1, int(self.settings["retries"]))
+        hedge = max(0.2, float(self.settings["hedge_delay"]))
+        picks: list[dict] = []
+        avoid: set[tuple[str, int, str]] = set()
+        for _ in range(tries):
+            proxy = await self._pick(require_tunnel, avoid)
+            if not proxy:
+                break
+            avoid.add((proxy["ip"], int(proxy["port"]), proxy["protocol"]))
+            picks.append(proxy)
+        if not picks:
+            raise NoProxyAvailable("no proxy available")
+
+        async def attempt(proxy: dict, delay: float):
+            if delay:
+                await asyncio.sleep(delay)
+            started = time.monotonic()
+            up_r, up_w = await self._open(proxy, host, port)
+            return up_r, up_w, proxy, started
+
+        usage = {asyncio.create_task(attempt(p, i * hedge)): p
+                 for i, p in enumerate(picks)}
+        errors: list[Exception] = []
+        try:
+            while usage:
+                done, _ = await asyncio.wait(list(usage),
+                                             return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    proxy = usage.pop(task)
+                    exc = task.exception()
+                    if exc is None:
+                        up_r, up_w, proxy, started = task.result()
+                        return up_r, up_w, proxy, started
+                    errors.append(exc)
+                    self.fails += 1
+                    self.last_error = f"{type(exc).__name__}: {exc}"
+                    await self._mark_failed(proxy, str(exc))
+        finally:
+            if usage:
+                for task in usage:
+                    task.cancel()
+                await asyncio.gather(*usage, return_exceptions=True)
+        raise errors[-1] if errors else NoProxyAvailable("no proxy available")
+
+    # ── background health ───────────────────────────────────────────
+    async def _health_loop(self) -> None:
+        while self.running:
+            try:
+                await self._health_pass()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                self.last_error = f"health: {type(exc).__name__}: {exc}"[:200]
+            await asyncio.sleep(max(10.0, float(self.settings["health_interval"])))
+
+    async def _health_pass(self) -> None:
+        """Re-probe the stalest rows so `alive` and `https` stay current."""
+        from app.validator import check
+
+        batch = max(1, int(self.settings["health_batch"]))
+        async with db().execute(
+            "SELECT ip, port, protocol FROM proxies "
+            "WHERE alive=1 AND excluded=0 "
+            "ORDER BY (verified_at IS NULL) DESC, verified_at ASC LIMIT ?",
+            (batch,),
+        ) as cur:
+            rows = [dict(r) for r in await cur.fetchall()]
+        if not rows:
+            return
+        sem = asyncio.Semaphore(min(32, len(rows)))
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+        async def probe(row: dict) -> None:
+            async with sem:
+                result = await check(row["ip"], row["port"], row["protocol"],
+                                     timeout=float(self.settings["timeout"]))
+            if result:
+                # Only a proxy that carried TLS counts as verified; plain-HTTP
+                # reachability says nothing about its tunnel.
+                verified = now if result["https"] else None
+                await execute(
+                    "UPDATE proxies SET checks_failed=0, verified_at=?, "
+                    "latency_ms=?, anonymity=?, https=? "
+                    "WHERE ip=? AND port=? AND protocol=?",
+                    (verified, result["latency_ms"], result["anonymity"],
+                     result["https"], row["ip"], row["port"], row["protocol"]),
+                )
+            else:
+                await self._mark_failed(row, "health probe failed")
+
+        await asyncio.gather(*(probe(row) for row in rows),
+                             return_exceptions=True)
+
+
     # ── upstream tunnels ────────────────────────────────────────────
     async def _open(self, proxy: dict, host: str, port: int):
-        timeout = float(self.settings["timeout"])
+        # A live proxy finishes its handshake in well under a second. Spending
+        # the full request budget on a dead one is what makes the gateway feel
+        # hung, so the whole open phase gets a tight ceiling.
+        timeout = min(float(self.settings["timeout"]), 5.0)
         reader, writer = await asyncio.wait_for(
             asyncio.open_connection(proxy["ip"], int(proxy["port"])), timeout)
         try:
@@ -235,7 +397,7 @@ class Gateway:
             else:
                 raise OSError(f"unsupported protocol {proxy['protocol']}")
             return reader, writer
-        except Exception:
+        except BaseException:
             writer.close()
             try:
                 await writer.wait_closed()
@@ -244,7 +406,8 @@ class Gateway:
             raise
 
     # ── relay ───────────────────────────────────────────────────────
-    async def _relay(self, client_r, client_w, up_r, up_w, proxy: dict) -> None:
+    async def _relay(self, client_r, client_w, up_r, up_w, proxy: dict,
+                     started: float | None = None) -> None:
         session = Session((proxy["ip"], int(proxy["port"]), proxy["protocol"]))
         sid = id(session)
         self.sessions[sid] = session
@@ -279,6 +442,14 @@ class Gateway:
             self.sessions.pop(sid, None)
             self.active -= 1
             await self._persist_session(session)
+            # Verification is evidence, not intention: a row counts as verified
+            # only once the upstream actually sent bytes back. A row that
+            # accepts CONNECT and then says nothing never earns the rank.
+            latency = int((time.monotonic() - started) * 1000) if started else 0
+            if session.bytes_in > 0:
+                await self._mark_ok(proxy, latency)
+            elif session.bytes_out > 0:
+                await self._mark_failed(proxy, "tunnel carried no upstream data")
 
     async def _persist_session(self, session: Session) -> None:
         if not (session.bytes_in or session.bytes_out):
@@ -377,17 +548,13 @@ class Gateway:
                 return
             port = struct.unpack(">H", await reader.readexactly(2))[0]
 
-            proxy = await self._pick(require_tunnel=(port == 443))
-            if not proxy:
+            try:
+                up_r, up_w, proxy, started = await self._connect(host, port, port == 443)
+            except NoProxyAvailable:
                 writer.write(b"\x05\x01\x00\x01" + b"\x00" * 6)
                 await writer.drain()
                 return
-            try:
-                up_r, up_w = await self._open(proxy, host, port)
-            except Exception as exc:
-                self.fails += 1
-                self.last_error = f"{type(exc).__name__}: {exc}"
-                await self._mark_failed(proxy, str(exc))
+            except Exception:
                 writer.write(b"\x05\x05\x00\x01" + b"\x00" * 6)
                 await writer.drain()
                 return
@@ -395,7 +562,7 @@ class Gateway:
             writer.write(b"\x05\x00\x00\x01" + b"\x00" * 6)
             await writer.drain()
             self.connections += 1
-            await self._relay(reader, writer, up_r, up_w, proxy)
+            await self._relay(reader, writer, up_r, up_w, proxy, started)
         except Exception:
             pass
         finally:
@@ -428,17 +595,13 @@ class Gateway:
                     port = int(raw_port)
                 except ValueError:
                     host, port = target, 443
-                proxy = await self._pick(require_tunnel=True)
-                if not proxy:
+                try:
+                    up_r, up_w, proxy, started = await self._connect(host, port, True)
+                except NoProxyAvailable:
                     writer.write(b"HTTP/1.1 503 No Proxy\r\nContent-Length: 0\r\n\r\n")
                     await writer.drain()
                     return
-                try:
-                    up_r, up_w = await self._open(proxy, host, port)
                 except Exception as exc:
-                    self.fails += 1
-                    self.last_error = f"{type(exc).__name__}: {exc}"
-                    await self._mark_failed(proxy, str(exc))
                     msg = f"upstream failed: {exc}".encode()
                     writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: "
                                  + str(len(msg)).encode() + b"\r\n\r\n" + msg)
@@ -447,7 +610,7 @@ class Gateway:
                 writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                 await writer.drain()
                 self.connections += 1
-                await self._relay(reader, writer, up_r, up_w, proxy)
+                await self._relay(reader, writer, up_r, up_w, proxy, started)
                 return
 
             parts = urlsplit(target)
@@ -461,24 +624,20 @@ class Gateway:
             if parts.query:
                 path += "?" + parts.query
             rewritten = f"{method} {path} {version}\r\n".encode() + rest
-            proxy = await self._pick()
-            if not proxy:
+            try:
+                up_r, up_w, proxy, started = await self._connect(host, port, port == 443)
+            except NoProxyAvailable:
                 writer.write(b"HTTP/1.1 503 No Proxy\r\nContent-Length: 0\r\n\r\n")
                 await writer.drain()
                 return
-            try:
-                up_r, up_w = await self._open(proxy, host, port)
-            except Exception as exc:
-                self.fails += 1
-                self.last_error = f"{type(exc).__name__}: {exc}"
-                await self._mark_failed(proxy, str(exc))
+            except Exception:
                 writer.write(b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
                 await writer.drain()
                 return
             up_w.write(rewritten)
             await up_w.drain()
             self.connections += 1
-            await self._relay(reader, writer, up_r, up_w, proxy)
+            await self._relay(reader, writer, up_r, up_w, proxy, started)
         except Exception:
             pass
         finally:
@@ -492,18 +651,23 @@ class Gateway:
         async with db().execute(
             "SELECT COUNT(*) c, COALESCE(SUM(bytes_in+bytes_out),0) b, "
             "COALESCE(SUM(requests),0) r, "
-            "SUM(CASE WHEN quota_bytes>0 THEN 1 ELSE 0 END) q "
+            "SUM(CASE WHEN quota_bytes>0 THEN 1 ELSE 0 END) q, "
+            "SUM(CASE WHEN verified_at IS NOT NULL THEN 1 ELSE 0 END) v, "
+            "SUM(CASE WHEN https=1 THEN 1 ELSE 0 END) t "
             "FROM proxies WHERE alive=1 AND excluded=0 "
             "AND (quota_bytes=0 OR bytes_in + bytes_out < quota_bytes)"
         ) as cur:
             row = await cur.fetchone()
         pool = {"eligible": row["c"], "bytes": row["b"],
-                "requests": row["r"], "quota_rows": row["q"] or 0}
+                "requests": row["r"], "quota_rows": row["q"] or 0,
+                "verified": row["v"] or 0, "tunnel_capable": row["t"] or 0}
         warnings = []
         if not self.running:
             warnings.append("gateway is stopped")
         if pool["eligible"] == 0:
             warnings.append("no eligible proxy — collect a pool or clear quotas")
+        elif pool["tunnel_capable"] == 0:
+            warnings.append("no TLS-capable proxy — run a pool scan before serving https")
         if self.fails and self.connections:
             rate = self.fails / max(1, self.connections + self.fails)
             if rate > 0.25:
@@ -519,6 +683,9 @@ class Gateway:
             "quota_mb": self.settings["quota_mb"],
             "timeout": self.settings["timeout"],
             "max_fails": self.settings["max_fails"],
+            "retries": self.settings["retries"],
+            "health_interval": self.settings["health_interval"],
+            "health_batch": self.settings["health_batch"],
             "enabled_protocols": self.settings["enabled_protocols"],
             "connections": self.connections,
             "fails": self.fails,
