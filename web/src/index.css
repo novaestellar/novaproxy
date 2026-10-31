@@ -23,17 +23,20 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  --c-background: #fdfaf5;
+  /* paper deepened so white cards separate from it; border raised from 1.17:1
+     to a visible edge; faint darkened for 11 px labels. */
+  --c-background: #f8f3ea;
   --c-surface: #ffffff;
   --c-panel: #ffffff;
-  --c-elevated: #f7f0e6;
-  --c-border: #f0e7dc;
-  --c-border-strong: #e4d8c9;
-  --c-fg: #2e2733;
-  --c-muted: #574f5f;
-  --c-faint: #77707f;
+  --c-elevated: #f2ebdf;
+  --c-border: #e3d7c3;
+  --c-border-strong: #d2c3aa;
+  --c-fg: #2b2430;
+  --c-muted: #514a58;
+  --c-faint: #6a6373;
 
-  --c-accent: #8f6fd8;
+  --c-accent: #6b4bc7;
+  --c-accent-bright: #8f6fd8;
   --c-accent-soft: #ede7fb;
   --c-success: #3e8e6c;
   --c-warning: #8a6414;
@@ -62,9 +65,10 @@
   --c-border-strong: #4a3d60;
   --c-fg: #f3eefa;
   --c-muted: #b7aec7;
-  --c-faint: #857b99;
+  --c-faint: #9a90ad;
 
   --c-accent: #a78be0;
+  --c-accent-bright: #a78be0;
   --c-accent-soft: #3a2f55;
   --c-success: #6fdca6;
   --c-warning: #ffd37a;
@@ -97,6 +101,7 @@
   --color-faint: var(--c-faint);
 
   --color-accent: var(--c-accent);
+  --color-accent-bright: var(--c-accent-bright);
   --color-accent-soft: var(--c-accent-soft);
   --color-success: var(--c-success);
   --color-warning: var(--c-warning);
@@ -364,4 +369,14 @@
 }
 .live-dot {
   animation: pulse-ring 2s infinite;
+}
+
+
+/* ---------------------------------------------------------------- surfaces --
+   A border alone cannot carry structure on paper this warm: measured 1.17:1
+   against the page. Cards get a soft drop shadow instead, in both themes. */
+.shadow-card {
+  box-shadow:
+    0 1px 2px rgba(60, 48, 90, 0.05),
+    0 14px 30px -22px rgba(60, 48, 90, 0.4);
 }

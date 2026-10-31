@@ -21,7 +21,7 @@ export function Progress({
     >
       <div
         className={cn(
-          "h-full rounded-full bg-gradient-to-r from-accent to-[#a78bfa] transition-[width] duration-500",
+          "h-full rounded-full bg-gradient-to-r from-accent to-accent-bright transition-[width] duration-500",
           indicatorClassName,
         )}
         style={{ width: `${clamped}%` }}

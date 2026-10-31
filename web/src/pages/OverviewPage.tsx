@@ -34,18 +34,18 @@ import { Progress, Skeleton } from "@/components/ui/progress";
 
 const LATENCY_ORDER = ["<250", "250-500", "500-1k", "1-2k", "2s+", "n/a"];
 const ANON_COLORS: Record<string, string> = {
-  elite: "#3ddc97",
-  anonymous: "#7c6cff",
-  transparent: "#f5b759",
-  unknown: "#5d6575",
+  elite: "var(--color-success)",
+  anonymous: "var(--color-accent-bright)",
+  transparent: "var(--color-warning)",
+  unknown: "var(--color-faint)",
 };
 
 const tooltipStyle = {
-  background: "#11141a",
-  border: "1px solid #1f242e",
+  background: "var(--color-panel)",
+  border: "1px solid var(--color-border)",
   borderRadius: 8,
   fontSize: 12,
-  color: "#e8eaf0",
+  color: "var(--color-fg)",
 };
 
 type BadgeTone = "default" | "accent" | "success" | "warning" | "danger" | "info" | "outline";
@@ -234,25 +234,25 @@ export function OverviewPage() {
                 <BarChart data={latencyData} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
                   <XAxis
                     dataKey="bucket"
-                    tick={{ fill: "#5d6575", fontSize: 11 }}
+                    tick={{ fill: "var(--color-faint)", fontSize: 11 }}
                     axisLine={false}
                     tickLine={false}
                   />
                   <YAxis
-                    tick={{ fill: "#5d6575", fontSize: 11 }}
+                    tick={{ fill: "var(--color-faint)", fontSize: 11 }}
                     axisLine={false}
                     tickLine={false}
                     allowDecimals={false}
                   />
                   <Tooltip
-                    cursor={{ fill: "rgba(255,255,255,0.03)" }}
+                    cursor={{ fill: "color-mix(in oklab, var(--color-accent) 10%, transparent)" }}
                     contentStyle={tooltipStyle}
-                    labelStyle={{ color: "#8b93a3" }}
+                    labelStyle={{ color: "var(--color-muted)" }}
                   />
                   <Bar
                     dataKey="count"
                     radius={[4, 4, 0, 0]}
-                    fill="#7c6cff"
+                    fill="var(--color-accent-bright)"
                     maxBarSize={56}
                     isAnimationActive={false}
                   />
@@ -283,7 +283,7 @@ export function OverviewPage() {
                     isAnimationActive={false}
                   >
                     {anonymityData.map((entry) => (
-                      <Cell key={entry.name} fill={ANON_COLORS[entry.name] ?? "#5d6575"} />
+                      <Cell key={entry.name} fill={ANON_COLORS[entry.name] ?? "var(--color-faint)"} />
                     ))}
                   </Pie>
                   <Tooltip contentStyle={tooltipStyle} />
@@ -301,7 +301,7 @@ export function OverviewPage() {
                 <div key={entry.name} className="flex items-center gap-2 text-[11px]">
                   <span
                     className="size-2 rounded-full"
-                    style={{ background: ANON_COLORS[entry.name] ?? "#5d6575" }}
+                    style={{ background: ANON_COLORS[entry.name] ?? "var(--color-faint)" }}
                   />
                   <span className="capitalize text-muted">{entry.name}</span>
                   <span className="ml-auto font-mono text-faint">{entry.value}</span>

@@ -48,7 +48,7 @@ export function LogConsole({
   }, [filtered.length, follow]);
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-[#080a0d]">
+    <div className="flex flex-col overflow-hidden rounded-lg border border-border bg-[var(--color-background)]">
       {!compact && (
         <div className="flex flex-wrap items-center gap-2 border-b border-border bg-panel/60 px-3 py-2">
           <div className="flex items-center gap-1">
@@ -117,11 +117,11 @@ export function LogConsole({
         )}
         {filtered.map((line, index) => (
           <div key={`${line.ts}-${index}`} className="flex gap-2 whitespace-pre-wrap break-words">
-            <span className="shrink-0 text-[#3d4453]">{timeOf(line.ts)}</span>
+            <span className="shrink-0 text-faint">{timeOf(line.ts)}</span>
             <span className={cn("shrink-0 uppercase", LEVEL_STYLE[line.level] ?? "text-muted")}>
               {line.level.padEnd(5, " ")}
             </span>
-            <span className="text-[#c3c9d4]">{line.msg}</span>
+            <span className="text-fg">{line.msg}</span>
           </div>
         ))}
       </div>
