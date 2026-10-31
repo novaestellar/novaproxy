@@ -950,17 +950,26 @@ class Gateway:
                 try:
                     up_r, up_w = await self._open(proxy, host, port)
                 except Exception:
+                    # The pinned exit died. Re-pin THIS session instead of quietly
+                    # serving it from a rotated proxy: a consumer that asked for a
+                    # stable exit must be told, not moved.
                     self._sticky_drop(key)
-                    try:
-                        up_r, up_w, proxy, started = await self._connect(
-                            host, port, True, host=host)
-                    except Exception:
+                    proxy = await self._sticky_proxy(key, host, port)
+                    if not proxy:
                         writer.write(b"HTTP/1.1 502 Bad Gateway\r\n"
                                      b"Content-Length: 0\r\n\r\n")
                         await writer.drain()
                         return
-                else:
-                    self._reserve(proxy)
+                    started = time.monotonic()
+                    try:
+                        up_r, up_w = await self._open(proxy, host, port)
+                    except Exception:
+                        self._sticky_drop(key)
+                        writer.write(b"HTTP/1.1 502 Bad Gateway\r\n"
+                                     b"Content-Length: 0\r\n\r\n")
+                        await writer.drain()
+                        return
+                self._reserve(proxy)
                 try:
                     writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                     await writer.drain()
@@ -994,17 +1003,26 @@ class Gateway:
             try:
                 up_r, up_w = await self._open(proxy, host, port)
             except Exception:
+                # The pinned exit died. Re-pin THIS session instead of quietly
+                # serving it from a rotated proxy: a consumer that asked for a
+                # stable exit must be told, not moved.
                 self._sticky_drop(key)
-                try:
-                    up_r, up_w, proxy, started = await self._connect(
-                        host, port, port == 443, host=host)
-                except Exception:
+                proxy = await self._sticky_proxy(key, host, port)
+                if not proxy:
                     writer.write(b"HTTP/1.1 502 Bad Gateway\r\n"
                                  b"Content-Length: 0\r\n\r\n")
                     await writer.drain()
                     return
-            else:
-                self._reserve(proxy)
+                started = time.monotonic()
+                try:
+                    up_r, up_w = await self._open(proxy, host, port)
+                except Exception:
+                    self._sticky_drop(key)
+                    writer.write(b"HTTP/1.1 502 Bad Gateway\r\n"
+                                 b"Content-Length: 0\r\n\r\n")
+                    await writer.drain()
+                    return
+            self._reserve(proxy)
             up_w.write(f"{method} {path} {version}\r\n".encode() + rest)
             await up_w.drain()
             self.connections += 1
@@ -1188,6 +1206,15 @@ class Gateway:
             "host_block_minutes": self.settings["host_block_minutes"],
             "inflight": sum(self._inflight.values()),
             "sticky_port": self.settings["sticky_port"],
+            # What this endpoint is, so a consumer does not have to guess: a pool
+            # of public proxies can hold a session, and cannot pass Cloudflare.
+            # Residential work belongs to a different provider.
+            "class": "public-pool",
+            "capabilities": {
+                "session_pin": True,
+                "pin_unit": "proxy row (ip:port:protocol)",
+                "cloudflare_clearance": False,
+            },
             "sticky_sessions": len(self._sticky),
             "sticky_pins": [
                 {"session": k, "ip": v["proxy"]["ip"],
