@@ -74,6 +74,17 @@ CREATE TABLE IF NOT EXISTS target_hits (
 );
 CREATE INDEX IF NOT EXISTS idx_target_hits_host ON target_hits(host, ok);
 
+CREATE TABLE IF NOT EXISTS burned_exits (
+    ip TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    protocol TEXT NOT NULL,
+    reason TEXT,
+    strikes INTEGER NOT NULL DEFAULT 1,
+    first_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+    last_seen TEXT DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (ip, port, protocol)
+);
+
 CREATE TABLE IF NOT EXISTS sources (
     url TEXT NOT NULL,
     protocol TEXT NOT NULL,

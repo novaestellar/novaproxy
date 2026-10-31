@@ -10,6 +10,7 @@ import {
   Play,
   Square,
   Lock,
+  LifeBuoy,
 } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
@@ -133,6 +134,40 @@ export function GatewayPage() {
     onError: (error: Error) => toast.error(error.message),
   });
 
+  const [fbForm, setFbForm] = useState({ ip: "", port: 8080, protocol: "http" });
+  const burnedQuery = useQuery({
+    queryKey: ["burned"],
+    queryFn: () => api.burnedList(20),
+    refetchInterval: 10_000,
+  });
+  const burned = burnedQuery.data?.items ?? [];
+
+  const saveFallback = useMutation({
+    mutationFn: () => api.fallbackSet(fbForm),
+    onSuccess: () => {
+      toast.success(`Fallback set to ${fbForm.ip}:${fbForm.port}`);
+      refetch();
+    },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const clearFallback = useMutation({
+    mutationFn: api.fallbackClear,
+    onSuccess: () => {
+      toast.success("Fallback cleared");
+      refetch();
+    },
+  });
+
+  const clearBurned = useMutation({
+    mutationFn: api.burnedClear,
+    onSuccess: (res) => {
+      toast.success(`Cleared ${res.cleared} burned exits`);
+      burnedQuery.refetch();
+      refetch();
+    },
+  });
+
   const [pinForm, setPinForm] = useState({
     session: "",
     ip: "",
@@ -240,6 +275,23 @@ export function GatewayPage() {
           value={data.pool.eligible.toLocaleString()}
           hint={`${data.pool.tunnel_capable} TLS-capable · ${data.pool.verified} verified`}
         />
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {[
+          { label: "alive / total", value: `${data.pool.eligible}`, hint: `burned ${data.pool.burned}` },
+          { label: "exit IPs", value: `${data.exit_ips}`, hint: "unique this run" },
+          { label: "median", value: fmtLatency(data.pool.median_ms), hint: "pooled latency" },
+          { label: "conns / fails", value: `${data.connections}`, hint: `${data.fails} failed` },
+          { label: "quota used", value: fmtBytes(data.pool.quota_used), hint: `${data.pool.quota_rows} limited` },
+          { label: "fallback", value: data.fallback ? `${data.fallback.ip}` : "none", hint: `${data.fallback_hits} hits` },
+        ].map((item) => (
+          <div key={item.label} className="rounded-md border border-border bg-panel/60 px-3 py-2">
+            <div className="text-[10px] uppercase tracking-wide text-faint">{item.label}</div>
+            <div className="mt-0.5 truncate font-mono text-[12px] text-fg">{item.value}</div>
+            <div className="text-[10px] text-faint">{item.hint}</div>
+          </div>
+        ))}
       </div>
 
       {data.warnings.length > 0 && (
@@ -417,6 +469,100 @@ export function GatewayPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="mt-3">
+        <CardHeader>
+          <div>
+            <CardTitle className="flex items-center gap-2">
+              <LifeBuoy className="size-4 text-warning" />
+              Fallback exit &amp; burned ledger
+            </CardTitle>
+            <CardDescription>
+              The fallback is dialled only after every pooled candidate fails. The ledger
+              keeps exits that already died, so a rescan cannot quietly put them back.
+            </CardDescription>
+          </div>
+          <Badge variant={data.pool.burned ? "warning" : "default"}>
+            {data.pool.burned} burned
+          </Badge>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="w-44">
+              <Label>Fallback IP</Label>
+              <Input
+                value={fbForm.ip}
+                onChange={(event) => setFbForm({ ...fbForm, ip: event.target.value })}
+                placeholder="1.2.3.4"
+              />
+            </div>
+            <div className="w-24">
+              <Label>Port</Label>
+              <Input
+                type="number"
+                value={fbForm.port}
+                onChange={(event) => setFbForm({ ...fbForm, port: Number(event.target.value) })}
+              />
+            </div>
+            <div className="w-28">
+              <Label>Proto</Label>
+              <NativeSelect
+                value={fbForm.protocol}
+                onChange={(event) => setFbForm({ ...fbForm, protocol: event.target.value })}
+              >
+                <option value="http">http</option>
+                <option value="socks5">socks5</option>
+                <option value="socks4">socks4</option>
+              </NativeSelect>
+            </div>
+            <Button size="sm" onClick={() => saveFallback.mutate()} disabled={!fbForm.ip || saveFallback.isPending}>
+              Save fallback
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => clearFallback.mutate()} disabled={!data.fallback}>
+              Clear
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => clearBurned.mutate()}
+              disabled={!data.pool.burned || clearBurned.isPending}
+            >
+              Clear burned
+            </Button>
+          </div>
+
+          {burned.length === 0 ? (
+            <div className="rounded-md border border-border bg-background/50 p-3 text-[12px] text-muted">
+              No exit has been burned yet.
+            </div>
+          ) : (
+            <div className="max-h-48 overflow-auto rounded-md border border-border">
+              <table className="w-full text-left text-[12px]">
+                <thead className="border-b border-border text-[10px] uppercase tracking-wide text-faint">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Exit</th>
+                    <th className="px-3 py-2 font-medium">Proto</th>
+                    <th className="px-3 py-2 font-medium">Strikes</th>
+                    <th className="px-3 py-2 font-medium">Reason</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {burned.map((row) => (
+                    <tr key={`${row.ip}:${row.port}:${row.protocol}`} className="border-b border-border/60 last:border-0">
+                      <td className="px-3 py-2 font-mono text-fg">{row.ip}:{row.port}</td>
+                      <td className="px-3 py-2 text-muted">{row.protocol}</td>
+                      <td className="px-3 py-2 font-mono text-muted">{row.strikes}</td>
+                      <td className="max-w-[320px] truncate px-3 py-2 text-[11px] text-faint" title={row.reason}>
+                        {row.reason || "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="mt-3">
         <CardHeader>

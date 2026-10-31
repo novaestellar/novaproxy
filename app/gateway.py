@@ -1,4 +1,4 @@
-"""novaproxy gateway — one local SOCKS5/HTTP endpoint in front of the pool.
+﻿"""novaproxy gateway — one local SOCKS5/HTTP endpoint in front of the pool.
 
 Adapted from novastar's gateway: rotation, failover, per-proxy byte accounting
 and quota enforcement. The difference is where the pool comes from — there are
@@ -107,6 +107,9 @@ class Gateway:
         self._blocked_cache: dict[str, tuple[float, set]] = {}
         self._last_status = 0
         self._sticky: dict[str, dict] = {}
+        self.fallback: dict | None = None
+        self.fallback_hits = 0
+        self.used_exits: set[tuple[str, int]] = set()
         self._sample = {"in": 0, "out": 0, "req": 0, "at": time.time()}
 
     # ── settings ────────────────────────────────────────────────────
@@ -121,6 +124,13 @@ class Gateway:
                         self.settings[key] = value
             except Exception:
                 pass
+        try:
+            async with db().execute("SELECT value FROM kv WHERE key='fallback'") as cur:
+                row = await cur.fetchone()
+            self.fallback = json.loads(row["value"]) if row else None
+        except Exception:
+            self.fallback = None
+
         # Old builds shipped 11080/8120. Move them once so an existing database
         # does not keep binding ports the operator no longer wants.
         if self.settings["socks_port"] == 11080:
@@ -219,7 +229,10 @@ class Gateway:
         protocols = self.settings["enabled_protocols"] or ["http"]
         marks = ",".join("?" * len(protocols))
         where = (f"WHERE alive=1 AND excluded=0 AND protocol IN ({marks}) "
-                 "AND (quota_bytes=0 OR bytes_in + bytes_out < quota_bytes)")
+                 "AND (quota_bytes=0 OR bytes_in + bytes_out < quota_bytes) "
+                 "AND NOT EXISTS (SELECT 1 FROM burned_exits b "
+                 "WHERE b.ip=proxies.ip AND b.port=proxies.port "
+                 "AND b.protocol=proxies.protocol)")
         params: list = list(protocols)
         if require_tunnel:
             # A proxy that answers http:// but drops CONNECT/TLS cannot serve an
@@ -367,6 +380,24 @@ class Gateway:
             "WHERE ip=? AND port=? AND protocol=?",
             (max_fails, proxy["ip"], proxy["port"], proxy["protocol"]),
         )
+        await self._burn(proxy, error)
+
+    async def _burn(self, proxy: dict, reason: str) -> None:
+        """Keep a global ledger of exits that died, so a rescan cannot resurrect
+        them silently into rotation."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            await execute(
+                "INSERT INTO burned_exits (ip, port, protocol, reason, strikes, "
+                "first_seen, last_seen) VALUES (?,?,?,?,1,?,?) "
+                "ON CONFLICT(ip, port, protocol) DO UPDATE SET "
+                "strikes = strikes + 1, reason = excluded.reason, "
+                "last_seen = excluded.last_seen",
+                (proxy["ip"], proxy["port"], proxy["protocol"],
+                 reason[:120], now, now),
+            )
+        except Exception:
+            pass
 
     async def _target_good(self, host: str) -> set[tuple[str, int, str]]:
         """Proxies that recently carried traffic to this exact host."""
@@ -438,6 +469,15 @@ class Gateway:
             avoid.add((proxy["ip"], int(proxy["port"]), proxy["protocol"]))
             picks.append(proxy)
         if not picks:
+            if self.fallback:
+                try:
+                    up_r, up_w = await self._open(self.fallback, host, port)
+                except Exception as exc:  # noqa: BLE001
+                    self.last_error = f"fallback failed: {type(exc).__name__}: {exc}"
+                else:
+                    self.fallback_hits += 1
+                    self._reserve(self.fallback)
+                    return up_r, up_w, self.fallback, time.monotonic()
             raise NoProxyAvailable("no proxy available")
 
         async def attempt(proxy: dict, delay: float):
@@ -484,6 +524,15 @@ class Gateway:
                             result[1].close()
                         except Exception:
                             pass
+        if self.fallback:
+            try:
+                up_r, up_w = await self._open(self.fallback, host, port)
+            except Exception as exc:  # noqa: BLE001
+                self.last_error = f"fallback failed: {type(exc).__name__}: {exc}"
+            else:
+                self.fallback_hits += 1
+                self._reserve(self.fallback)
+                return up_r, up_w, self.fallback, time.monotonic()
         raise errors[-1] if errors else NoProxyAvailable("no proxy available")
 
     # ── background health ───────────────────────────────────────────
@@ -658,6 +707,7 @@ class Gateway:
             # accepts CONNECT and then says nothing never earns the rank.
             latency = int((time.monotonic() - started) * 1000) if started else 0
             if session.bytes_in > 0:
+                self.used_exits.add((proxy["ip"], int(proxy["port"])))
                 await self._mark_ok(proxy, latency)
                 await self._record_target(host, proxy, True)
             elif session.bytes_out > 0:
@@ -1088,9 +1138,29 @@ class Gateway:
             "AND (quota_bytes=0 OR bytes_in + bytes_out < quota_bytes)"
         ) as cur:
             row = await cur.fetchone()
+        latencies = []
+        async with db().execute(
+            "SELECT latency_ms FROM proxies WHERE alive=1 AND latency_ms IS NOT NULL "
+            "ORDER BY latency_ms LIMIT 2000"
+        ) as cur:
+            latencies = [r["latency_ms"] for r in await cur.fetchall()]
+        median = latencies[len(latencies) // 2] if latencies else 0
+        async with db().execute(
+            "SELECT COUNT(*) c FROM burned_exits"
+        ) as cur:
+            burned = (await cur.fetchone())["c"]
+        async with db().execute(
+            "SELECT COALESCE(SUM(bytes_in+bytes_out),0) used, "
+            "COALESCE(SUM(CASE WHEN quota_bytes>0 AND bytes_in+bytes_out>=quota_bytes "
+            "THEN 1 ELSE 0 END),0) full_count FROM proxies WHERE quota_bytes>0"
+        ) as cur:
+            qrow = await cur.fetchone()
+        quota_used, quota_full = qrow["used"], qrow["full_count"]
         pool = {"eligible": row["c"], "bytes": row["b"],
                 "requests": row["r"], "quota_rows": row["q"] or 0,
-                "verified": row["v"] or 0, "tunnel_capable": row["t"] or 0}
+                "verified": row["v"] or 0, "tunnel_capable": row["t"] or 0,
+                "median_ms": median, "burned": burned,
+                "quota_used": quota_used, "quota_full": quota_full}
         warnings = []
         if not self.running:
             warnings.append("gateway is stopped")
@@ -1127,6 +1197,9 @@ class Gateway:
                 for k, v in list(self._sticky.items())[:20]
             ],
             "last_upstream_status": self._last_status,
+            "exit_ips": len(self.used_exits),
+            "fallback": self.fallback,
+            "fallback_hits": self.fallback_hits,
             "hedge_delay": self.settings["hedge_delay"],
             "deadline": self.settings["deadline"],
             "first_byte_timeout": self.settings["first_byte_timeout"],

@@ -134,7 +134,14 @@ export type GatewayStatus = {
     quota_rows: number;
     verified: number;
     tunnel_capable: number;
+    median_ms: number;
+    burned: number;
+    quota_used: number;
+    quota_full: number;
   };
+  exit_ips: number;
+  fallback: { ip: string; port: number; protocol: string } | null;
+  fallback_hits: number;
   warnings: string[];
   last_error: string;
 };

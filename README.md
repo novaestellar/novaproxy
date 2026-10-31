@@ -223,6 +223,25 @@ proxies = {"http": "http://127.0.0.1:12500", "https": "http://127.0.0.1:12500"}
 | `max_per_proxy` | 2 | 同一代理同时承载几条客户端隧道 |
 | `host_block_minutes` | 10 | 某站点返回 429/402/407 后，该出口冷却多久 |
 
+**兜底出口与熔断台账**
+
+`fallback` 是最后一个出口：只有当池子里所有候选都失败时才会拨它，平时绝不参与轮换。
+每次死掉的出口会写入 `burned_exits` 台账，`_pick` 会跳过台账里的行——这样重新扫描
+也不会把已经死掉的出口悄悄放回轮换。
+
+```
+POST /api/gateway/fallback        {"ip":"1.2.3.4","port":8080,"protocol":"http"}
+POST /api/gateway/fallback/clear
+GET  /api/gateway/burned?limit=50
+POST /api/gateway/burned/clear
+```
+
+**指标条**
+
+网关页顶部六个格子：`alive / total`、`exit IPs`（本次运行真正搬运过流量的出口数）、
+`median`（池内延迟中位数）、`conns / fails`、`quota used`（受配额约束的行已用字节）、
+`fallback`（当前兜底出口与命中次数）。
+
 **粘性会话**
 
 除了轮换入口，还有第三个监听 `127.0.0.1:12501`：同一会话固定使用同一个出口，
@@ -332,6 +351,10 @@ pytest -q
 | POST | `/api/gateway/drop-dead` | 剔除死行 |
 | POST | `/api/gateway/restore` | 恢复全部 |
 | POST | `/api/gateway/settings` | 更新网关参数 |
+| GET | `/api/gateway/burned` | 熔断台账（已死出口） |
+| POST | `/api/gateway/burned/clear` | 清空台账 |
+| POST | `/api/gateway/fallback` | 设置兜底出口 |
+| POST | `/api/gateway/fallback/clear` | 移除兜底出口 |
 | GET | `/api/analytics` | 流量样本、协议分布、配额状态 |
 | GET | `/api/settings` | 只读配置视图 |
 | GET | `/api/site-checks` | 站点检测历史 |

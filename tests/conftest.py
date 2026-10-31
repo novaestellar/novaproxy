@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import tempfile
 from pathlib import Path
@@ -23,6 +23,7 @@ async def database():
     conn = await db_module.init_db()
     await db_module.execute("DELETE FROM proxies")
     await db_module.execute("DELETE FROM target_hits")
+    await db_module.execute("DELETE FROM burned_exits")
     yield db_module
     await conn.close()
 

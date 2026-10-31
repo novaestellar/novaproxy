@@ -434,6 +434,53 @@ async def api_sticky_clear():
     return {"ok": True, "sessions": 0}
 
 
+@app.get("/api/gateway/burned")
+async def api_burned(limit: int = 50):
+    async with db().execute(
+        "SELECT ip, port, protocol, reason, strikes, first_seen, last_seen "
+        "FROM burned_exits ORDER BY last_seen DESC LIMIT ?", (max(1, min(limit, 500)),)
+    ) as cur:
+        items = [dict(r) for r in await cur.fetchall()]
+    async with db().execute("SELECT COUNT(*) c FROM burned_exits") as cur:
+        total = (await cur.fetchone())["c"]
+    return {"total": total, "items": items}
+
+
+@app.post("/api/gateway/burned/clear")
+async def api_burned_clear():
+    async with db().execute("SELECT COUNT(*) c FROM burned_exits") as cur:
+        total = (await cur.fetchone())["c"]
+    await execute("DELETE FROM burned_exits")
+    return {"ok": True, "cleared": total}
+
+
+@app.post("/api/gateway/fallback")
+async def api_fallback_set(request: Request):
+    """Last-resort exit, tried only after every pooled candidate fails."""
+    body = await request.json()
+    ip = str(body.get("ip", "")).strip()
+    port = int(body.get("port", 0) or 0)
+    protocol = str(body.get("protocol", "http"))
+    if not ip or not port or protocol not in ("http", "socks4", "socks5"):
+        return JSONResponse({"error": "ip, port and a valid protocol are required"},
+                            status_code=400)
+    payload = {"ip": ip, "port": port, "protocol": protocol}
+    await execute(
+        "INSERT INTO kv (key, value) VALUES ('fallback', ?) "
+        "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (json.dumps(payload),))
+    gateway.fallback = payload
+    return {"ok": True, "fallback": payload}
+
+
+@app.post("/api/gateway/fallback/clear")
+async def api_fallback_clear():
+    await execute("DELETE FROM kv WHERE key='fallback'")
+    gateway.fallback = None
+    gateway.fallback_hits = 0
+    return {"ok": True}
+
+
 @app.get("/api/gateway")
 async def api_gateway():
     return await gateway.snapshot()

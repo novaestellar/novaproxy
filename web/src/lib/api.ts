@@ -137,6 +137,20 @@ export const api = {
   gatewaySettings: (patch: Record<string, unknown>) =>
     request<GatewayStatus>("/api/gateway/settings", jsonBody(patch)),
 
+  burnedList: (limit = 30) =>
+    request<{ total: number; items: { ip: string; port: number; protocol: string; reason: string; strikes: number; last_seen: string }[] }>(
+      `/api/gateway/burned?limit=${limit}`,
+    ),
+
+  burnedClear: () =>
+    request<{ ok: boolean; cleared: number }>("/api/gateway/burned/clear", { method: "POST" }),
+
+  fallbackSet: (body: { ip: string; port: number; protocol: string }) =>
+    request<{ ok: boolean }>("/api/gateway/fallback", jsonBody(body)),
+
+  fallbackClear: () =>
+    request<{ ok: boolean }>("/api/gateway/fallback/clear", { method: "POST" }),
+
   stickyPin: (body: { session: string; ip: string; port: number; protocol: string }) =>
     request<{ ok: boolean; session: string }>("/api/gateway/sticky/pin", jsonBody(body)),
 
