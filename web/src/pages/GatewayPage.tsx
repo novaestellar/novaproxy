@@ -583,6 +583,15 @@ export function GatewayPage() {
           </Badge>
         </CardHeader>
         <CardContent className="space-y-3">
+          {/* What this endpoint is, stated by the endpoint itself: a public pool
+              can hold a session and cannot clear Cloudflare. */}
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
+            <Badge variant="default">{data.class}</Badge>
+            <span>session pin: {data.capabilities?.session_pin ? "yes" : "no"}</span>
+            {!data.capabilities?.cloudflare_clearance && (
+              <span>- no Cloudflare clearance (public pool)</span>
+            )}
+          </div>
           <div className="flex flex-wrap items-end gap-2">
             <div className="w-40">
               <Label>Session</Label>

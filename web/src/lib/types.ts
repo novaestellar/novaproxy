@@ -110,6 +110,12 @@ export type GatewayStatus = {
   inflight: number;
   last_upstream_status: number;
   sticky_port: number;
+  class: string;
+  capabilities: {
+    session_pin: boolean;
+    pin_unit: string;
+    cloudflare_clearance: boolean;
+  };
   sticky_sessions: number;
   sticky_pins: {
     session: string;
