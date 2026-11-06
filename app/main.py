@@ -707,13 +707,31 @@ async def _autopool_cfg() -> dict:
 
 
 async def _pool_counts() -> dict:
+    # 'alive' dan 'tls' adalah angka mentah: keduanya tetap menghitung baris
+    # yang sudah masuk daftar hitam burned_exits dan baris tanpa https, jadi
+    # bisa terlihat sehat (794 / 137) padahal yang benar-benar bisa dipakai
+    # gateway nol. 'usable' memakai filter yang sama dengan gateway._pick(),
+    # termasuk daftar hitam yang sekarang kedaluwarsa setelah burn_hours.
+    gs = gateway.settings
+    burn_hours = int(gs.get("burn_hours", 24))
+    cutoff = time.strftime("%Y-%m-%dT%H:%M:%S",
+                           time.localtime(time.time() - burn_hours * 3600))
+    protocols = gs.get("enabled_protocols") or ["http"]
+    marks = ",".join("?" * len(protocols))
     async with db().execute(
         "SELECT COALESCE(SUM(alive),0) alive, "
         "COALESCE(SUM(CASE WHEN alive=1 AND https=1 THEN 1 ELSE 0 END),0) tls, "
-        "COUNT(*) total FROM proxies"
+        "COUNT(*) total, "
+        "COALESCE(SUM(CASE WHEN p.alive=1 AND p.excluded=0 AND p.https=1 "
+        f"AND p.protocol IN ({marks}) "
+        "AND NOT EXISTS (SELECT 1 FROM burned_exits b WHERE b.ip=p.ip "
+        "AND b.port=p.port AND b.protocol=p.protocol AND b.last_seen >= ?) "
+        "THEN 1 ELSE 0 END),0) usable FROM proxies p",
+        (*protocols, cutoff),
     ) as cur:
         row = await cur.fetchone()
-    return {"alive": row["alive"], "tls": row["tls"], "total": row["total"]}
+    return {"alive": row["alive"], "tls": row["tls"], "total": row["total"],
+            "usable": row["usable"]}
 
 
 async def _autopool_loop() -> None:
@@ -729,9 +747,15 @@ async def _autopool_loop() -> None:
             interval = max(60.0, float(cfg["interval_min"]) * 60.0)
             if cfg["enabled"] and not engine.busy() and time.time() - last >= interval:
                 counts = await _pool_counts()
-                if counts["alive"] < cfg["min_alive"] or counts["tls"] < cfg["min_tls"]:
+                # Syarat pemanen memakai 'usable', bukan 'alive': daftar hitam
+                # burned_exits bisa memakan seluruh pool sementara angka alive
+                # masih tinggi, dan tanpa ini autopool tidak pernah memanen.
+                if (counts["usable"] < cfg["min_tls"]
+                        or counts["alive"] < cfg["min_alive"]
+                        or counts["tls"] < cfg["min_tls"]):
                     last = time.time()
-                    engine.log("info", f"auto-pool: alive {counts['alive']} / tls "
+                    engine.log("info", f"auto-pool: usable {counts['usable']} / "
+                                       f"alive {counts['alive']} / tls "
                                        f"{counts['tls']} below floor — harvesting "
                                        f"{cfg['target']}")
                     await engine.start(int(cfg["target"]),
