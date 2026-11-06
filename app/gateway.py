@@ -46,6 +46,7 @@ DEFAULT_SETTINGS = {
     "first_byte_timeout": 2.5,       # give up if upstream stays silent
     "idle_timeout": 3.8,             # cut a tunnel that stops moving bytes
     "verified_window": 600,          # seconds a proven row keeps its rank
+    "burn_hours": 24,                # umur catatan burned_exits sebelum diabaikan
     "health_interval": 30.0,         # seconds between background re-probes
     "health_batch": 40,              # rows re-probed per pass
     "enabled_protocols": ["http", "socks5", "socks4"],
@@ -228,12 +229,22 @@ class Gateway:
                     host: str | None = None) -> dict | None:
         protocols = self.settings["enabled_protocols"] or ["http"]
         marks = ",".join("?" * len(protocols))
+        # Daftar hitam tidak boleh permanen: tabel burned_exits tidak punya
+        # kolom kedaluwarsa, dan tanpa batas umur dia memblacklist seluruh
+        # pool dalam hitungan hari sampai _pick() mengembalikan nol dan
+        # gateway hidup tapi tidak bisa mengeluarkan satu byte pun.
+        # last_seen ditulis dengan jam lokal (lihat penulisan INSERT di bawah),
+        # jadi cutoff-nya pun harus jam lokal yang sama.
+        burn_hours = int(self.settings.get("burn_hours", 24))
+        burn_cutoff = time.strftime("%Y-%m-%dT%H:%M:%S",
+                                    time.localtime(time.time() - burn_hours * 3600))
         where = (f"WHERE alive=1 AND excluded=0 AND protocol IN ({marks}) "
                  "AND (quota_bytes=0 OR bytes_in + bytes_out < quota_bytes) "
                  "AND NOT EXISTS (SELECT 1 FROM burned_exits b "
                  "WHERE b.ip=proxies.ip AND b.port=proxies.port "
-                 "AND b.protocol=proxies.protocol)")
-        params: list = list(protocols)
+                 "AND b.protocol=proxies.protocol "
+                 "AND b.last_seen >= ?)")
+        params: list = list(protocols) + [burn_cutoff]
         if require_tunnel:
             # A proxy that answers http:// but drops CONNECT/TLS cannot serve an
             # https:// client. The validator records that capability in `https`
