@@ -41,9 +41,9 @@ DEFAULT_SETTINGS = {
     "sticky_port": 12501,            # one exit pinned per session
     "sticky_ttl": 300,               # seconds a pin survives idle
     "retries": 4,                    # upstream attempts per client request
-    "hedge_delay": 0.6,              # start the next attempt this early
-    "deadline": 3.0,                 # hard ceiling for opening a tunnel
-    "first_byte_timeout": 2.5,       # give up if upstream stays silent
+    "hedge_delay": 0.8,              # start the next attempt this early
+    "deadline": 8.0,                 # hard ceiling for opening a tunnel (proxy publik butuh waktu)
+    "first_byte_timeout": 3.5,       # give up if upstream stays silent
     "idle_timeout": 3.8,             # cut a tunnel that stops moving bytes
     "verified_window": 600,          # seconds a proven row keeps its rank
     "burn_hours": 24,                # umur catatan burned_exits sebelum diabaikan
