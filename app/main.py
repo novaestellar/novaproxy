@@ -758,7 +758,10 @@ async def _autopool_loop() -> None:
                                        f"alive {counts['alive']} / tls "
                                        f"{counts['tls']} below floor — harvesting "
                                        f"{cfg['target']}")
-                    await engine.start(int(cfg["target"]),
+                    # Target panen harus di atas alive saat ini agar engine._run
+                    # tidak langsung berhenti dengan 'target met' di detik ke-0.
+                    harvest_target = max(int(cfg["target"]), counts["alive"] + 200)
+                    await engine.start(harvest_target,
                                        ["http", "socks4", "socks5"], 2, False)
         except asyncio.CancelledError:
             raise
