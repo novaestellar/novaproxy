@@ -16,6 +16,7 @@ Three things keep the success rate up on a pool of free proxies:
 from __future__ import annotations
 
 import asyncio
+import base64
 import ipaddress
 import json
 import os
@@ -889,7 +890,15 @@ class Gateway:
             entry["last"] = time.time()
             return entry["proxy"]
 
-        tried: set[tuple[str, int, str]] = set()
+        # Exit yang sudah dipin sesi lain harus dihindari, bukan dipakai ulang.
+        # Tanpa ini setiap sesi baru memilih entri teratas yang sama dari _pick,
+        # sehingga "sticky per session" hanya berlaku untuk sesi pertama dan
+        # sisanya keluar dari IP itu juga.
+        tried: set[tuple[str, int, str]] = {
+            (p["proxy"]["ip"], int(p["proxy"]["port"]), p["proxy"]["protocol"])
+            for p in self._sticky.values()
+            if p.get("proxy")
+        }
         for _ in range(max(1, int(self.settings["retries"]))):
             proxy = await self._pick(require_tunnel=True, host=host, avoid=tried)
             if not proxy:
@@ -937,13 +946,29 @@ class Gateway:
 
             peer = writer.get_extra_info("peername") or ("", 0)
             key = f"ip:{peer[0]}"
+            # Urutan yang dipakai: Proxy-Authorization dulu, baru X-NP-Session.
+            # Untuk target HTTPS hanya yang pertama yang sampai ke sini --
+            # header permintaan menyusul di dalam tunnel, setelah pin dipilih.
+            auth_user = ""
             cleaned = []
             for line in rest.split(b"\r\n"):
                 low = line.lower()
+                if low.startswith(b"proxy-authorization:"):
+                    raw = line.split(b":", 1)[1].strip()
+                    if raw.lower().startswith(b"basic "):
+                        try:
+                            dec = base64.b64decode(raw[6:].strip()).decode("latin-1")
+                            auth_user = dec.split(":", 1)[0].strip()
+                        except Exception:  # noqa: BLE001
+                            auth_user = ""
+                    cleaned.append(line)          # diteruskan apa adanya
+                    continue
                 if low.startswith(b"x-np-session:"):
                     key = line.split(b":", 1)[1].strip().decode("latin-1") or key
                     continue
                 cleaned.append(line)
+            if auth_user:
+                key = auth_user
             rest = b"\r\n".join(cleaned)
 
             if method.upper() == "CONNECT":
