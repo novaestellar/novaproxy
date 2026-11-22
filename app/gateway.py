@@ -47,7 +47,8 @@ DEFAULT_SETTINGS = {
     "first_byte_timeout": 3.5,       # give up if upstream stays silent
     "idle_timeout": 3.8,             # cut a tunnel that stops moving bytes
     "verified_window": 600,          # seconds a proven row keeps its rank
-    "burn_hours": 24,                # umur catatan burned_exits sebelum diabaikan
+    "burn_strikes": 3,               # strikes before a row is hard-excluded
+    "burn_hours": 2,                 # umur catatan burned_exits sebelum diabaikan
     "health_interval": 30.0,         # seconds between background re-probes
     "health_batch": 40,              # rows re-probed per pass
     "enabled_protocols": ["http", "socks5", "socks4"],
@@ -236,16 +237,19 @@ class Gateway:
         # gateway hidup tapi tidak bisa mengeluarkan satu byte pun.
         # last_seen ditulis dengan jam lokal (lihat penulisan INSERT di bawah),
         # jadi cutoff-nya pun harus jam lokal yang sama.
-        burn_hours = int(self.settings.get("burn_hours", 24))
+        burn_hours = int(self.settings.get("burn_hours", 2))
         burn_cutoff = time.strftime("%Y-%m-%dT%H:%M:%S",
                                     time.localtime(time.time() - burn_hours * 3600))
+        burn_strikes = int(self.settings.get("burn_strikes", 3))
+        # A single failed request is a transient, not proof that an exit is
+        # dead. Only hard-exclude after repeated failures during the cooldown.
         where = (f"WHERE alive=1 AND excluded=0 AND protocol IN ({marks}) "
                  "AND (quota_bytes=0 OR bytes_in + bytes_out < quota_bytes) "
                  "AND NOT EXISTS (SELECT 1 FROM burned_exits b "
                  "WHERE b.ip=proxies.ip AND b.port=proxies.port "
                  "AND b.protocol=proxies.protocol "
-                 "AND b.last_seen >= ?)")
-        params: list = list(protocols) + [burn_cutoff]
+                 "AND b.strikes >= ? AND b.last_seen >= ?)")
+        params: list = list(protocols) + [burn_strikes, burn_cutoff]
         if require_tunnel:
             # A proxy that answers http:// but drops CONNECT/TLS cannot serve an
             # https:// client. The validator records that capability in `https`
@@ -384,7 +388,14 @@ class Gateway:
                 status = None
         return status, head
 
-    async def _mark_failed(self, proxy: dict, error: str) -> None:
+    async def _mark_failed(self, proxy: dict, error: str,
+                           burn: bool = True) -> None:
+        """Record a failure; persist hard exclusions only for hard failures.
+
+        `burn=False` covers transient probe/health/sticky failures. Those
+        already increment `checks_failed`; putting each one in the permanent-ish
+        burn ledger made a single timeout remove a good exit for a full window.
+        """
         max_fails = int(self.settings["max_fails"])
         await execute(
             "UPDATE proxies SET checks_failed = checks_failed + 1, "
@@ -392,21 +403,33 @@ class Gateway:
             "WHERE ip=? AND port=? AND protocol=?",
             (max_fails, proxy["ip"], proxy["port"], proxy["protocol"]),
         )
-        await self._burn(proxy, error)
+        if burn:
+            await self._burn(proxy, error)
 
     async def _burn(self, proxy: dict, reason: str) -> None:
-        """Keep a global ledger of exits that died, so a rescan cannot resurrect
-        them silently into rotation."""
+        """Record a hard failure; a successful probe clears this quarantine."""
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
         try:
             await execute(
                 "INSERT INTO burned_exits (ip, port, protocol, reason, strikes, "
                 "first_seen, last_seen) VALUES (?,?,?,?,1,?,?) "
                 "ON CONFLICT(ip, port, protocol) DO UPDATE SET "
-                "strikes = strikes + 1, reason = excluded.reason, "
-                "last_seen = excluded.last_seen",
+                "strikes = burned_exits.strikes + "
+                "CASE WHEN burned_exits.last_seen = excluded.last_seen "
+                "THEN 0 ELSE 1 END, "
+                "reason = excluded.reason, last_seen = excluded.last_seen",
                 (proxy["ip"], proxy["port"], proxy["protocol"],
                  reason[:120], now, now),
+            )
+        except Exception:
+            pass
+
+    async def _clear_burn(self, proxy: dict) -> None:
+        """A clean, successful tunnel probe supersedes stale failure history."""
+        try:
+            await execute(
+                "DELETE FROM burned_exits WHERE ip=? AND port=? AND protocol=?",
+                (proxy["ip"], proxy["port"], proxy["protocol"]),
             )
         except Exception:
             pass
@@ -459,6 +482,7 @@ class Gateway:
             (now, now, latency_ms, latency_ms,
              proxy["ip"], proxy["port"], proxy["protocol"]),
         )
+        await self._clear_burn(proxy)
 
     async def _connect(self, host: str, port: int, require_tunnel: bool,
                        avoid: set[tuple[str, int, str]] | None = None):
@@ -518,7 +542,7 @@ class Gateway:
                         errors.append(exc)
                         self.fails += 1
                         self.last_error = f"{type(exc).__name__}: {exc}"
-                        await self._mark_failed(proxy, str(exc))
+                        await self._mark_failed(proxy, str(exc), burn=False)
         except TimeoutError:
             self.fails += 1
             self.last_error = f"no tunnel within {deadline:.0f}s"
@@ -598,7 +622,7 @@ class Gateway:
                      result["https"], row["ip"], row["port"], row["protocol"]),
                 )
             else:
-                await self._mark_failed(row, "health probe failed")
+                await self._mark_failed(row, "health probe failed", burn=False)
 
         await asyncio.gather(*(probe(row) for row in rows),
                              return_exceptions=True)
@@ -887,35 +911,57 @@ class Gateway:
         self._sticky_prune()
         entry = self._sticky.get(key)
         if entry:
-            entry["last"] = time.time()
-            return entry["proxy"]
+            # A pin is a promise only while its row is still usable. Trusting it
+            # blindly for the whole TTL kept every request of that session on a
+            # dead exit while healthy rows sat behind it.
+            if await self._pin_still_usable(entry["proxy"]):
+                entry["last"] = time.time()
+                return entry["proxy"]
+            self._sticky.pop(key, None)
 
-        # Exit yang sudah dipin sesi lain harus dihindari, bukan dipakai ulang.
-        # Tanpa ini setiap sesi baru memilih entri teratas yang sama dari _pick,
-        # sehingga "sticky per session" hanya berlaku untuk sesi pertama dan
-        # sisanya keluar dari IP itu juga.
-        tried: set[tuple[str, int, str]] = {
+        # Exit that is already pinned to another session is preferred-avoided,
+        # not forbidden: without the preference every new session lands on the
+        # same top row and sticky collapses into one shared exit. But once the
+        # pin count covers the whole pool, avoidance alone starves _pick, so the
+        # second attempt allows reusing a pinned row.
+        pinned: set[tuple[str, int, str]] = {
             (p["proxy"]["ip"], int(p["proxy"]["port"]), p["proxy"]["protocol"])
             for p in self._sticky.values()
             if p.get("proxy")
         }
-        for _ in range(max(1, int(self.settings["retries"]))):
-            proxy = await self._pick(require_tunnel=True, host=host, avoid=tried)
-            if not proxy:
-                return None
-            tried.add((proxy["ip"], int(proxy["port"]), proxy["protocol"]))
-            try:
-                _up_r, up_w = await self._open(proxy, host, port)
-            except Exception as exc:  # noqa: BLE001
-                await self._mark_failed(proxy, f"sticky probe: {exc}"[:120])
-                continue
-            try:
-                up_w.close()
-            except Exception:
-                pass
-            self._sticky[key] = {"proxy": proxy, "last": time.time()}
-            return proxy
+        for avoid in (pinned, set()):
+            tried = set(avoid)
+            for _ in range(max(1, int(self.settings["retries"]))):
+                proxy = await self._pick(require_tunnel=True, host=host, avoid=tried)
+                if not proxy:
+                    break
+                tried.add((proxy["ip"], int(proxy["port"]), proxy["protocol"]))
+                try:
+                    _up_r, up_w = await self._open(proxy, host, port)
+                except Exception as exc:  # noqa: BLE001
+                    await self._mark_failed(proxy, f"sticky probe: {exc}"[:120],
+                                            burn=False)
+                    continue
+                try:
+                    up_w.close()
+                except Exception:
+                    pass
+                self._sticky[key] = {"proxy": proxy, "last": time.time()}
+                return proxy
         return None
+
+    async def _pin_still_usable(self, proxy: dict) -> bool:
+        """True while the pinned row is still allowed to serve CONNECT."""
+        try:
+            async with db().execute(
+                "SELECT alive, excluded, https FROM proxies WHERE ip=? AND port=? "
+                "AND protocol=?",
+                (proxy["ip"], int(proxy["port"]), proxy["protocol"]),
+            ) as cur:
+                row = await cur.fetchone()
+        except Exception:  # noqa: BLE001
+            return False
+        return bool(row) and row["alive"] == 1 and row["excluded"] == 0 and row["https"] == 1
 
     def _sticky_drop(self, key: str) -> None:
         self._sticky.pop(key, None)

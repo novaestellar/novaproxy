@@ -41,6 +41,8 @@ async def gw(database):
         "host_block_minutes": 10,
         "verified_window": 600,
         "max_fails": 2,
+        "burn_strikes": 3,
+        "burn_hours": 2,
     })
     return gateway
 

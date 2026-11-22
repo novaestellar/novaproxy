@@ -158,6 +158,44 @@ async def test_dead_pin_is_repinned_not_rotated(database, gw, monkeypatch):
     assert "sess-1" in gw._sticky
 
 
+async def test_dead_pinned_proxy_is_replaced(database, gw):
+    """Serving a pin whose row died hands the caller a dead exit forever.
+
+    Pins used to be trusted blindly for the whole TTL, so once the pinned row
+    went dead every request of that session kept failing while a healthy pool
+    sat right behind it.
+    """
+    await add_proxy(database, "10.5.0.1", 8080)
+    await add_proxy(database, "10.5.0.2", 8080)
+
+    first = await gw._sticky_proxy("sess-dead", "ipstar.io")
+    assert first is not None
+    await database.execute("UPDATE proxies SET alive=0 WHERE ip=?", (first["ip"],))
+
+    again = await gw._sticky_proxy("sess-dead", "ipstar.io")
+    assert again is not None
+    assert again["ip"] != first["ip"]
+
+
+async def test_new_session_still_picks_when_every_pool_row_is_pinned(database, gw):
+    """Pins are only a preference, never a lock.
+
+    Every new session avoids the exits already pinned to other sessions. Once
+    the pool is smaller than the pin count that avoidance set covered the whole
+    pool, _pick returned nothing, and the listener answered every fresh session
+    with no exit (observed live as 0/5 while a healthy pool sat idle).
+    """
+    await add_proxy(database, "10.6.0.1", 8080)
+    await add_proxy(database, "10.6.0.2", 8080)
+
+    assert await gw._sticky_proxy("pin-a", "ipstar.io") is not None
+    assert await gw._sticky_proxy("pin-b", "ipstar.io") is not None
+    assert len(gw._sticky) == 2
+
+    extra = await gw._sticky_proxy("pin-c", "ipstar.io")
+    assert extra is not None, "fresh session got no exit while every row was pinned"
+
+
 async def test_capabilities_are_declared(gw):
     """A consumer must be able to read what this endpoint is."""
     status = await gw.snapshot()
