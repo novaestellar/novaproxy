@@ -388,6 +388,22 @@ async def api_test_proxies(request: Request):
 
     passed = sum(1 for r in merged if r["ok"])
     latencies = [r["latency_ms"] for r in merged if r["ok"] and r["latency_ms"] is not None]
+
+    # The site-check is the only test that speaks to the CONSUMER's target, so
+    # its verdict has to reach the pool. Before this the result was recorded
+    # and forgotten: a row that could not carry the target stayed alive and
+    # kept being handed out. Measured 2026-11-24: the pool advertised 891
+    # usable exits while only 52 could carry TLS, and a consumer waited out a
+    # 30 s timeout on a real target because of it.
+    #
+    # A row that fails the target loses its alive flag; a row that passes
+    # keeps it. Rows that were not checked are left alone.
+    failed_keys = [(r["ip"], r["port"], r["protocol"]) for r in merged if not r["ok"]]
+    if failed_keys:
+        await executemany(
+            "UPDATE proxies SET alive=0, checks_failed=checks_failed+1 "
+            "WHERE ip=? AND port=? AND protocol=?",
+            failed_keys)
     return {
         "url": url,
         "total": len(merged),

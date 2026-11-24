@@ -43,7 +43,16 @@ class Engine:
 
     # ── db helpers ─────────────────────────────────────────────────
     async def alive_count(self, protocols: set[str] | None = None) -> int:
-        sql = "SELECT COUNT(*) c FROM proxies WHERE alive=1"
+        """How many exits can actually carry HTTPS.
+
+        Measured 2026-11-24: alive=1 was set for any row that answered plain
+        HTTP, so the pool advertised 891 usable exits while only 52 could
+        carry TLS. A consumer of this pool then waited out a full 30 s timeout
+        on a real target because the exit it was handed could not do TLS.
+
+        So the headline number counts TLS-capable rows only.
+        """
+        sql = "SELECT COUNT(*) c FROM proxies WHERE alive=1 AND https=1"
         params: tuple = ()
         if protocols:
             sql += " AND protocol IN (%s)" % ",".join("?" * len(protocols))
@@ -68,16 +77,24 @@ class Engine:
     async def store_result(self, res: dict | None, source: str):
         if res is None:
             return
+        # `alive` has to mean "can carry HTTPS to a real target". A row that
+        # answered plain HTTP and then failed TLS (self-signed certificate,
+        # dropped CONNECT, timeout) is useless to every consumer of this pool,
+        # so it must not be counted as alive.
+        #
+        # Measured 2026-11-24: alive=1 without this rule gave the pool 891
+        # "usable" exits of which only 52 could carry TLS.
+        alive = 1 if res.get("https") else 0
         await execute(
             """INSERT INTO proxies (ip, port, protocol, anonymity, latency_ms,
                https, source, alive, checks_failed, last_checked)
-               VALUES (?,?,?,?,?,?,?,1,0,?)
+               VALUES (?,?,?,?,?,?,?,?,0,?)
                ON CONFLICT(ip, port, protocol) DO UPDATE SET
                  anonymity=excluded.anonymity, latency_ms=excluded.latency_ms,
-                 https=excluded.https, alive=1, checks_failed=0,
+                 https=excluded.https, alive=excluded.alive, checks_failed=0,
                  last_checked=excluded.last_checked""",
             (res["ip"], res["port"], res["protocol"], res["anonymity"],
-             res["latency_ms"], res["https"], source, _now()),
+             res["latency_ms"], res["https"], source, alive, _now()),
         )
 
     async def dedupe(self) -> int:
