@@ -1,11 +1,20 @@
 """Concurrent proxy health/anonymity checker."""
 import asyncio
+import os
 import time
 
 import aiohttp
 from aiohttp_socks import ProxyConnector
 
 JUDGES = ["http://httpbin.org/get", "http://ip-api.com/json"]
+
+# The host a row must be able to carry for it to be useful. A generic judge
+# (httpbin.org) says nothing about the host a consumer actually wants: measured
+# 2026-11-24 the pool looked healthy while the consumer's target was
+# unreachable through it. Configurable per deployment.
+PROBE_TARGETS = [u.strip() for u in os.getenv(
+    "NP_PROBE_TARGETS",
+    "https://httpbin.org/get,https://api.ipify.org/").split(",") if u.strip()]
 
 
 def _connector(protocol: str, proxy_url: str):
@@ -60,12 +69,19 @@ async def check(ip: str, port: int, protocol: str,
             # TLS through the tunnel is a separate capability from plain HTTP:
             # many public proxies answer http:// and then drop CONNECT. Probe it
             # for every protocol so the gateway can filter on it.
-            try:
-                async with s.get("https://httpbin.org/get", proxy=proxy,
-                                 timeout=aiohttp.ClientTimeout(total=6)) as r:
-                    result["https"] = int(r.status == 200)
-            except Exception:
-                pass
+            #
+            # The probe target is configurable (NP_PROBE_TARGETS). Probing a
+            # generic judge says nothing about the host a consumer wants, so
+            # the target list is what the deployment cares about.
+            for target in PROBE_TARGETS:
+                try:
+                    async with s.get(target, proxy=proxy,
+                                     timeout=aiohttp.ClientTimeout(total=6)) as r:
+                        if r.status < 400:
+                            result["https"] = 1
+                            break
+                except Exception:
+                    continue
         return result
     except Exception:
         return None

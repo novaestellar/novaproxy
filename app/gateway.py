@@ -359,7 +359,17 @@ class Gateway:
             self._inflight.pop(key, None)
 
     async def _blocked_for(self, host: str) -> set[tuple[str, int, str]]:
-        """Rows this host told us to back off from (429 / 402 / 407)."""
+        """Rows that must not be used for this host.
+
+        Two sources:
+          * the host told us to back off (429 / 402 / 407);
+          * a site-check against THIS host failed, so the row cannot reach it.
+
+        The second source is what the novamini session needed: the pool only
+        ever tested example.com, so a row that could not reach
+        `agent.minimax.io` still looked usable and the consumer waited out a
+        30 s timeout on it.
+        """
         now = time.time()
         cached = self._blocked_cache.get(host)
         if cached and now - cached[0] < 10:
@@ -373,6 +383,17 @@ class Gateway:
         ) as cur:
             for row in await cur.fetchall():
                 blocked.add((row["ip"], int(row["port"]), row["protocol"]))
+        # Rows that failed a site-check against this very host.
+        try:
+            async with db().execute(
+                "SELECT ip, port, protocol FROM site_checks "
+                "WHERE url LIKE ? AND ok=0",
+                (f"%{host}%",),
+            ) as cur:
+                for row in await cur.fetchall():
+                    blocked.add((row["ip"], int(row["port"]), row["protocol"]))
+        except Exception:
+            pass
         self._blocked_cache[host] = (now, blocked)
         return blocked
 
