@@ -36,7 +36,11 @@ DEFAULT_SETTINGS = {
     "strategy": "round_robin",      # round_robin | least_used | fastest
     "quota_mb": 0,                   # 0 = unlimited, applied to new rows on start
     "timeout": 8.0,
-    "max_fails": 2,
+    # How many failed probes retire a row. A free pool loses rows to one bad
+    # minute: measured 2026-11-24, 717 rows were alive=0 while still
+    # tunnel-capable, and 7 of 20 tested still answered CONNECT. Two failures
+    # is not enough evidence for a shared, flaky pool.
+    "max_fails": 5,
     "max_per_proxy": 2,              # concurrent client tunnels per row
     "host_block_minutes": 10,        # cool-off after a 429 from a target
     "sticky_port": 12501,            # one exit pinned per session
@@ -52,6 +56,23 @@ DEFAULT_SETTINGS = {
     "health_interval": 30.0,         # seconds between background re-probes
     "health_batch": 40,              # rows re-probed per pass
     "enabled_protocols": ["http", "socks5", "socks4"],
+}
+
+# Services that only echo the caller's exit IP. They are used to READ which
+# exit a tunnel produced, so they must never steer WHICH exit is chosen: the
+# "exits that already served this host" set for an echo service collapses to
+# the handful of exits that happen to serve it, and the pool then rotates to
+# the same address forever. Measured 2026-11-24: api.ipify.org had 153 exits
+# in its history but only 1 "good" one, and the rotation handed out that one
+# address in every session.
+ECHO_HOSTS = {
+    "api.ipify.org",
+    "ifconfig.me",
+    "icanhazip.com",
+    "ipinfo.io",
+    "checkip.amazonaws.com",
+    "wtfismyip.com",
+    "ip-api.com",
 }
 
 
@@ -309,13 +330,18 @@ class Gateway:
                 # latency. Two picks in three come from that set; the third
                 # keeps exploring so the pool does not collapse onto a handful
                 # of exits and get the whole target rate-limiting us.
-                good = await self._target_good(host)
-                if good:
-                    local = [r for r in rows
-                             if (r["ip"], int(r["port"]), r["protocol"]) in good]
-                    self._pick_n += 1
-                    if len(local) >= 4 and self._pick_n % 3:
-                        rows = local
+                #
+                # EXCEPT for IP-echo services: they are how the exit IP is
+                # READ, and their "good" set is tiny, so using them as a
+                # preference would pin the whole pool to one address.
+                if not self._is_echo_host(host):
+                    good = await self._target_good(host)
+                    if good:
+                        local = [r for r in rows
+                                 if (r["ip"], int(r["port"]), r["protocol"]) in good]
+                        self._pick_n += 1
+                        if len(local) >= 4 and self._pick_n % 3:
+                            rows = local
             self._rr = (self._rr + 1) % len(rows)
             return rows[self._rr]
 
@@ -406,6 +432,19 @@ class Gateway:
         if burn:
             await self._burn(proxy, error)
 
+    async def _revive(self, proxy: dict) -> None:
+        """Bring a retired row back into rotation.
+
+        A row that answers again is alive again. Without this the pool only
+        ever shrank: the health pass re-probed the alive rows, so a row that
+        was retired by one bad minute stayed retired forever.
+        """
+        await execute(
+            "UPDATE proxies SET alive=1, checks_failed=0 WHERE ip=? AND port=? "
+            "AND protocol=?",
+            (proxy["ip"], proxy["port"], proxy["protocol"]),
+        )
+
     async def _burn(self, proxy: dict, reason: str) -> None:
         """Record a hard failure; a successful probe clears this quarantine."""
         now = time.strftime("%Y-%m-%dT%H:%M:%S")
@@ -433,6 +472,10 @@ class Gateway:
             )
         except Exception:
             pass
+
+    def _is_echo_host(self, host: str) -> bool:
+        """True for services that only echo the caller's exit IP."""
+        return (host or "").strip().lower() in ECHO_HOSTS
 
     async def _target_good(self, host: str) -> set[tuple[str, int, str]]:
         """Proxies that recently carried traffic to this exact host."""
@@ -594,11 +637,17 @@ class Gateway:
         # Scale it up with the pool, bounded so the box stays responsive.
         want = max(int(self.settings["health_batch"]), alive // 30)
         batch = max(1, min(400, want))
+        # Rows that were marked dead are re-probed too. Measured 2026-11-24:
+        # 717 rows were alive=0 while still tunnel-capable, and 7 of 20 tested
+        # answered CONNECT. Re-probing only the alive rows meant a wrongly
+        # retired row could NEVER come back -- the pool only ever shrank.
+        # Rows that keep failing are left alone: the pass is for reviving.
         async with db().execute(
             "SELECT ip, port, protocol FROM proxies "
-            "WHERE alive=1 AND excluded=0 "
-            "ORDER BY (verified_at IS NULL) DESC, verified_at ASC LIMIT ?",
-            (batch,),
+            "WHERE excluded=0 AND (alive=1 OR checks_failed < ?) "
+            "ORDER BY (verified_at IS NULL) DESC, verified_at ASC, "
+            "alive ASC LIMIT ?",
+            (max(3, int(self.settings["max_fails"])), batch),
         ) as cur:
             rows = [dict(r) for r in await cur.fetchall()]
         if not rows:
@@ -621,6 +670,9 @@ class Gateway:
                     (verified, result["latency_ms"], result["anonymity"],
                      result["https"], row["ip"], row["port"], row["protocol"]),
                 )
+                # It answered, so it is alive again -- even if a previous
+                # probe pass had retired it.
+                await self._revive(row)
             else:
                 await self._mark_failed(row, "health probe failed", burn=False)
 
